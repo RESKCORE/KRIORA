@@ -1,0 +1,108 @@
+declare global {
+  interface Window {
+    pyodide?: any;
+    loadPyodide?: any;
+  }
+}
+
+let pyodidePromise: Promise<any> | null = null;
+
+// Share a single Pyodide instance with the whole app (mirrors PythonCompiler's loader).
+export function getPyodideInstance(): Promise<any> {
+  if (window.pyodide) return Promise.resolve(window.pyodide);
+  if (!pyodidePromise) {
+    pyodidePromise = (async () => {
+      if (!document.getElementById("pyodide-script")) {
+        const script = document.createElement("script");
+        script.id = "pyodide-script";
+        script.src = "https://cdn.jsdelivr.net/pyodide/v0.25.0/full/pyodide.js";
+        document.head.appendChild(script);
+        await new Promise((resolve, reject) => {
+          script.onload = resolve;
+          script.onerror = reject;
+        });
+      }
+      const py = await window.loadPyodide({
+        indexURL: "https://cdn.jsdelivr.net/pyodide/v0.25.0/full/",
+      });
+      window.pyodide = py;
+      return py;
+    })();
+  }
+  return pyodidePromise;
+}
+
+// Run student code with the given stdin, capture stdout/error.
+// Mirrors the sandbox used by PythonCompiler.tsx (Pyodide first, server fallback).
+export async function runPythonWithStdin(
+  code: string,
+  stdin: string
+): Promise<{ stdout: string; stderr: string; error: string | null }> {
+  try {
+    const py = await getPyodideInstance();
+    const stdinLines = stdin ? stdin.split("\n") : [];
+    const stdinJson = JSON.stringify(stdinLines);
+    const runnerScript = `
+import sys, io, json
+
+class StdinMock:
+    def __init__(self, lines):
+        self.lines = lines
+        self.idx = 0
+    def readline(self):
+        if self.idx < len(self.lines):
+            val = self.lines[self.idx] + "\\n"
+            self.idx += 1
+            return val
+        return ""
+
+sys.stdin = StdinMock(${stdinJson})
+sys.stdout = io.StringIO()
+sys.stderr = io.StringIO()
+
+exec_err = None
+try:
+    exec(${JSON.stringify(code)}, {})
+except Exception as e:
+    import traceback
+    exec_err = traceback.format_exc()
+
+std_out_val = sys.stdout.getvalue()
+std_err_val = sys.stderr.getvalue()
+if exec_err:
+    std_err_val = (std_err_val + "\\n" if std_err_val else "") + exec_err
+
+json.dumps({"stdout": std_out_val, "stderr": std_err_val, "error": exec_err})
+`;
+    const resultJsonStr = await py.runPythonAsync(runnerScript);
+    const result = JSON.parse(resultJsonStr);
+    return {
+      stdout: result.stdout || "",
+      stderr: result.stderr || "",
+      error: result.error || null,
+    };
+  } catch {
+    // Fallback to the server-side sandbox endpoint.
+    const res = await fetch("/api/compiler/execute", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ code, stdin }),
+    });
+    const data = await res.json();
+    if (data.success) {
+      return { stdout: data.output || "", stderr: "", error: null };
+    }
+    return { stdout: data.output || "", stderr: "", error: data.error || "Execution failed." };
+  }
+}
+
+// Tolerant-but-strict output comparison: normalize CRLF, trim trailing
+// whitespace per line and the final newline, so "  Ravi \n" == "Ravi".
+export function normalizeOutput(s: string): string {
+  return s
+    .replace(/\r\n/g, "\n")
+    .split("\n")
+    .map((line) => line.trimEnd())
+    .join("\n")
+    .trimEnd();
+}

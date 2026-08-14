@@ -1,0 +1,39 @@
+# Dependencies
+node_modules/
+.pnp
+.pnp.js
+
+# Testing & Coverage
+coverage/
+
+# Production Build
+dist/
+build/
+
+# Environment Variables
+.env*
+!.env.example
+
+# Temporary & Cache Folders
+.convex/
+.convex-tmp/
+.tmp-*
+*.tmp
+*.bak
+*.log
+.DS_Store
+Thumbs.db
+
+# Editor & IDE Configs
+.vscode/
+.idea/
+.kiro/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# Vercel & Deployment Artifacts
+.vercel
+*.tsbuildinfo
