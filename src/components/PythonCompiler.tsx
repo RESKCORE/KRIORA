@@ -24,12 +24,14 @@ export default function PythonCompiler({ starterCode = "", topicId, studentId }:
   const [activeConsoleTab, setActiveConsoleTab] = useState<"output" | "stdin" | "history">("output");
   const [copied, setCopied] = useState(false);
 
-  // Sync starterCode when prop updates
+  // Sync starterCode when prop updates or topicId changes
   useEffect(() => {
-    if (starterCode && !code) {
-      setCode(starterCode);
-    }
-  }, [starterCode]);
+    setCode(starterCode || "");
+    setOutput("");
+    setErrorMsg("");
+    setStatus("idle");
+    setExecutionMs(null);
+  }, [topicId, starterCode]);
 
   const handleCopyCode = () => {
     navigator.clipboard.writeText(code);

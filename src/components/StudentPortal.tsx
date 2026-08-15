@@ -103,6 +103,13 @@ export default function StudentPortal({
   const [assessmentResult, setAssessmentResult] = useState<any | null>(null);
   const [evalStatus, setEvalStatus] = useState<"idle" | "running" | "done" | "error">("idle");
 
+  // Reset assessment editor & state when switching days
+  useEffect(() => {
+    setAssessmentCode("");
+    setAssessmentResult(null);
+    setEvalStatus("idle");
+  }, [activeDayId]);
+
   // ── Track Seen Announcements for Student ────────────────────────────────
   const [seenAnnouncementIds, setSeenAnnouncementIds] = useState<string[]>(() => {
     if (typeof window !== "undefined" && (student?.id || student?.email)) {
@@ -1116,17 +1123,22 @@ export default function StudentPortal({
                         </div>
                       )}
 
-                      {/* Executable Worked Python Code */}
-                      {activeDay.content.workedExample.code && (
-                        <div className="space-y-2">
-                          <span className="text-[11px] font-mono font-bold text-slate-600 uppercase tracking-wider block">Executable Python Code:</span>
-                          <CodeSnippet
-                            title="Worked Python Implementation"
-                            code={activeDay.content.workedExample.code}
-                            explanation={activeDay.content.workedExample.codeExplanation}
-                          />
+                      {/* Implementation Challenge & Conceptual Walkthrough */}
+                      <div className="bg-gradient-to-r from-orange-50/80 to-amber-50/60 border border-orange-200/80 rounded-2xl p-5 space-y-3">
+                        <div className="flex items-center gap-2 text-orange-950 font-black text-xs uppercase tracking-wider">
+                          <Code className="w-4 h-4 text-[#FF5A36]" />
+                          <span>Implementation Challenge</span>
                         </div>
-                      )}
+                        <p className="text-xs text-slate-700 leading-relaxed">
+                          Follow the step-by-step algorithm and pseudocode blueprint above to write your own implementation. Open the <strong className="text-orange-600 font-bold">Python Sandbox & Test</strong> tab to write, test, and submit your code.
+                        </p>
+                        {activeDay.content.workedExample.codeExplanation && (
+                          <div className="pt-2 border-t border-orange-200/60 text-xs text-slate-600">
+                            <span className="font-semibold text-slate-800 block mb-1">Key Logic & Architectural Considerations:</span>
+                            <p className="leading-relaxed">{activeDay.content.workedExample.codeExplanation}</p>
+                          </div>
+                        )}
+                      </div>
                     </div>
                   )}
 
@@ -1209,7 +1221,7 @@ export default function StudentPortal({
                           Interactive Python Sandbox (Pyodide WASM Engine):
                         </label>
                         <PythonCompiler
-                          starterCode={activeDay.content?.workedExample?.code || `# Day ${activeDay.dayNumber} Interactive Sandbox\nprint("Hello Kriora!")`}
+                          starterCode={`# Day ${activeDay.dayNumber}: ${activeDay.title || "Daily Assessment Sandbox"}\n# Write your Python solution below:\n\n`}
                           topicId={activeDay.id}
                           studentId={student.id}
                         />
@@ -1226,7 +1238,7 @@ export default function StudentPortal({
                             rows={9}
                             value={assessmentCode}
                             onChange={(e) => setAssessmentCode(e.target.value)}
-                            placeholder="# Write or paste your complete Python solution code here..."
+                            placeholder={`# Write or paste your complete Python solution code for Day ${activeDay.dayNumber} here...`}
                             className="w-full font-mono text-xs p-4 bg-slate-900 text-emerald-300 border border-slate-800 rounded-2xl focus:ring-2 focus:ring-[#FF5A36] outline-none leading-relaxed shadow-xl"
                           />
                         </div>

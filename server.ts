@@ -65,7 +65,10 @@ async function callGeminiDirect(opts: {
 
   const models = [
     process.env.GEMINI_MODEL || 'gemini-2.5-flash',
-    'gemini-1.5-flash',
+    'gemini-2.5-flash-lite',
+    'gemini-3.7-flash',
+    'gemini-flash-latest',
+    'gemini-flash-lite-latest',
   ];
 
   const systemMsg = opts.system || opts.messages.find((m) => m.role === 'system')?.content;
@@ -125,32 +128,47 @@ async function callOpenRouterDirect(opts: {
   const key = process.env.OPENROUTER_API_KEY;
   if (!key) throw new Error('OPENROUTER_API_KEY is not configured');
 
-  const model = process.env.OPENROUTER_MODEL || 'meta-llama/llama-3.3-70b-instruct:free';
+  const models = [
+    process.env.OPENROUTER_MODEL || 'openrouter/free',
+    'openrouter/free',
+    'google/gemini-2.0-flash-lite-preview-02-05:free',
+    'meta-llama/llama-3.3-70b-instruct',
+  ];
 
-  const res = await fetch('https://openrouter.ai/api/v1/chat/completions', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${key}`,
-    },
-    signal: AbortSignal.timeout(30000),
-    body: JSON.stringify({
-      model,
-      messages: opts.messages,
-      temperature: opts.temperature ?? 0.7,
-      ...(opts.jsonMode ? { response_format: { type: 'json_object' } } : {}),
-    }),
-  });
+  let lastErr: any = null;
+  for (const model of models) {
+    try {
+      const res = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${key}`,
+        },
+        signal: AbortSignal.timeout(30000),
+        body: JSON.stringify({
+          model,
+          messages: opts.messages,
+          temperature: opts.temperature ?? 0.7,
+          ...(opts.jsonMode ? { response_format: { type: 'json_object' } } : {}),
+        }),
+      });
 
-  if (!res.ok) {
-    const body = await res.text().catch(() => '');
-    throw new Error(`OpenRouter HTTP ${res.status}: ${body.slice(0, 150)}`);
+      if (!res.ok) {
+        const body = await res.text().catch(() => '');
+        throw new Error(`OpenRouter ${model} HTTP ${res.status}: ${body.slice(0, 150)}`);
+      }
+
+      const data = await res.json();
+      const text = data?.choices?.[0]?.message?.content;
+      if (!text) throw new Error(`OpenRouter ${model} returned empty content`);
+      return text;
+    } catch (err: any) {
+      lastErr = err;
+      console.warn(`[AI Engine] OpenRouter ${model} failed:`, err.message);
+    }
   }
 
-  const data = await res.json();
-  const text = data?.choices?.[0]?.message?.content;
-  if (!text) throw new Error('OpenRouter returned empty content');
-  return text;
+  throw lastErr || new Error('OpenRouter generation failed');
 }
 
 async function generateAIWithFallback(opts: {
