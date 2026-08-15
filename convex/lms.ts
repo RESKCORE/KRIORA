@@ -1285,8 +1285,9 @@ export const adminCopilotChat = action({
   },
   handler: async (ctx, args) => {
     let livePlatformSummary = "";
+    let adminData: any = null;
     try {
-      const adminData: any = await ctx.runQuery(api.lms.getAdminDashboardData, {
+      adminData = await ctx.runQuery(api.lms.getAdminDashboardData, {
         actorEmail: args.actorEmail,
       });
 
@@ -1314,56 +1315,122 @@ export const adminCopilotChat = action({
 
         livePlatformSummary = `
 REAL-TIME LIVE KRIORA LMS PLATFORM DATA (Current Live Timestamp: ${new Date().toUTCString()}):
-- Platform / Institute: ${config.instituteName || "Kriora LMS Portal"}
+- Platform Name: ${config.instituteName || "Kriora LMS Portal"}
 - Total Registered Students: ${students.length}
-- Approved Active Students: ${approvedStudents.length}
-- Pending Student Registrations (Awaiting Admin Approval): ${pendingStudents.length}${
-          pendingStudents.length > 0
-            ? ` [${pendingStudents
-                .map((s: any) => `${s.fullName} (${s.email}, Course: ${s.preferredCourse || "Python"})`)
-                .join(", ")}]`
-            : " (None currently pending)"
-        }
-- Total LMS Batches: ${batches.length}${
-          batches.length > 0
-            ? ` [${batches
-                .map(
-                  (b: any) =>
-                    `"${b.name}" (Status: ${b.status}, Enrolled: ${
-                      students.filter((s: any) => s.batchId === b.id).length
-                    }/${b.capacity || 50}, Schedule: ${b.startTime || "N/A"}-${b.endTime || "N/A"})`
-                )
-                .join("; ")}]`
-            : " (No batches created yet)"
-        }
-- Published Announcements (${announcements.length}): ${
-          announcements.length > 0
-            ? announcements.slice(0, 5).map((a: any) => `"${a.title}"`).join(", ")
-            : "None"
-        }
-- Student Test Submissions: ${submissions.length} total assessments submitted (Average Score: ${avgScore}/10)
-- Configured Passing Threshold: ${config.dailyPerfThreshold || 70}% (Daily Tasks), ${config.finalExamThreshold || 80}% (Final Exam)
+- Approved Enrolled Students: ${approvedStudents.length}
+- Pending Student Registrations (Awaiting Administrator Approval): ${pendingStudents.length}
+${
+  pendingStudents.length > 0
+    ? `  Detailed Pending List:\n${pendingStudents
+        .map((s: any, idx: number) => `    ${idx + 1}. ${s.fullName} (${s.email}) — Course: ${s.preferredCourse || "Python Mastery"} | College: ${s.collegeName || "N/A"}`)
+        .join("\n")}`
+    : "  No pending registrations at this moment."
+}
+- Total LMS Batches (${batches.length}):
+${
+  batches.length > 0
+    ? batches
+        .map(
+          (b: any, idx: number) =>
+            `    ${idx + 1}. Batch "${b.name}" [ID: ${b.id}] — Status: ${b.status}, Enrolled: ${
+              students.filter((s: any) => s.batchId === b.id).length
+            }/${b.capacity || 50} students, Schedule: ${b.startTime || "N/A"} - ${b.endTime || "N/A"}`
+        )
+        .join("\n")
+    : "    No batches configured yet."
+}
+- Published Announcements on Platform (${announcements.length}):
+${
+  announcements.length > 0
+    ? announcements
+        .slice(0, 8)
+        .map((a: any, idx: number) => `    ${idx + 1}. "${a.title}" (Published: ${a.publishedAt || "Recently"})`)
+        .join("\n")
+    : "    No announcements published yet."
+}
+- Assessment Submissions Total: ${submissions.length} assessments submitted (Average Score: ${avgScore}/10)
+- Configured Passing Thresholds: ${config.dailyPerfThreshold || 70}% (Daily Tasks), ${config.finalExamThreshold || 80}% (Final Exam)
 `;
       }
     } catch (dbErr) {
       console.warn("[Admin Copilot] Could not query live admin data:", dbErr);
     }
 
-    const system = `You are the Kriora LMS Admin Copilot with direct, real-time access to the live Convex Cloud database.
+    // ── Check if the admin explicitly requested to PUBLISH or POST an announcement ──
+    const isPublishRequest =
+      /\b(publish|post|broadcast|send)\b.*\b(announcement|notice|update)\b/i.test(args.message) ||
+      /\b(publish|post|broadcast)\s+(it|this|now)\b/i.test(args.message) ||
+      /^(publish|post)\b/i.test(args.message.trim());
 
-${livePlatformSummary || "Live data unavailable."}
+    if (isPublishRequest) {
+      try {
+        const parsePrompt = `You are extracting or creating an announcement to be immediately published to Kriora LMS.
+Admin instruction: "${args.message}"
+Recent conversation context:
+${(args.history || []).slice(-3).map((m) => `${m.role}: ${m.content}`).join("\n")}
 
-CRITICAL RULES:
-1. When asked about metrics, pending registrations, batches, students, or platform stats, ALWAYS use the EXACT REAL DATA listed above. Never invent, approximate, or hallucinate fake numbers, placeholder batches, or outdated dates (e.g. 2023).
-2. If asked to draft an announcement, write high quality, professional markdown copy ready to broadcast to students.
-3. If the user asks to post an announcement, provide the finalized draft and confirm it is ready to be published to all students on Kriora LMS.
-4. Keep answers concise, executive, clean, and highly structured with bullet points.`;
+Respond ONLY with valid JSON in this exact structure:
+{
+  "title": "<Concise, attractive announcement title>",
+  "content": "<Clear, motivating announcement text formatted in clean markdown>",
+  "isPinned": false
+}`;
+
+        const parsedRaw = await generateConvexAI({
+          messages: [{ role: "user", content: parsePrompt }],
+          temperature: 0.3,
+          jsonMode: true,
+        });
+
+        const jsonMatch = parsedRaw.match(/\{[\s\S]*\}/);
+        if (jsonMatch) {
+          const annData = JSON.parse(jsonMatch[0]);
+          if (annData.title && annData.content) {
+            const adminEmail = args.actorEmail || ADMIN_EMAILS[0];
+            await ctx.runMutation(api.lms.upsertAnnouncement, {
+              actorEmail: adminEmail,
+              title: annData.title,
+              content: annData.content,
+              author: "Director Admin",
+              isPinned: !!annData.isPinned,
+            });
+
+            const replyText = `📢 **Announcement Published to Kriora LMS**
+
+### **${annData.title}**
+
+${annData.content}
+
+---
+✅ **Live Broadcast Status:** Successfully published to Convex Cloud! This announcement is now live in real-time across both the **Admin Portal** and all **Student Dashboards**.`;
+
+            return { success: true, text: replyText, reply: replyText };
+          }
+        }
+      } catch (pubErr) {
+        console.warn("[Admin Copilot] Auto-publish execution failed:", pubErr);
+      }
+    }
+
+    const system = `You are the Kriora LMS Admin Copilot with autonomous administrative execution powers and direct, real-time access to the live Convex Cloud database.
+
+${livePlatformSummary || "Live database metrics unavailable."}
+
+CRITICAL OPERATIONAL RULES:
+1. When asked about metrics, pending registrations, batches, students, submissions, or platform statistics, ALWAYS display the EXACT REAL DATA provided above.
+   - If pending student count is 0, state: "There are currently 0 pending student registrations awaiting approval."
+   - If pending students exist, list their real names, emails, and courses.
+   - List the actual LMS batches and their exact enrolled student counts.
+   - NEVER fabricate, simulate, or hallucinate placeholder numbers (e.g. do not say 15, 485, 512, etc.) or past years (e.g. 2023). Quote the live database accurately.
+2. If asked to draft or write an announcement, provide a polished draft in markdown and tell the admin:
+   "💡 *To publish this immediately to all students on Kriora LMS, reply 'Publish this announcement'.*"
+3. Keep all responses clean, structured, authoritative, and helpful. Always refer to the platform as Kriora LMS.`;
 
     const allMsgs = [...(args.history || []), { role: "user", content: args.message }];
     const text = await generateConvexAI({
       system,
       messages: allMsgs,
-      temperature: 0.5,
+      temperature: 0.4,
     });
 
     return { success: true, text, reply: text };
