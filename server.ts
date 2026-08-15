@@ -185,7 +185,7 @@ async function generateAIWithFallback(opts: {
   throw new Error('No AI provider keys configured (GEMINI_API_KEY or OPENROUTER_API_KEY).');
 }
 
-async function startServer() {
+export function createApp() {
   const app = express();
   app.use(express.json());
 
@@ -536,21 +536,33 @@ Return ONLY a JSON object with this exact shape:
     }
   });
 
+  return app;
+}
+
+export const app = createApp();
+
+export async function startServer() {
+  const serverApp = createApp();
+
   // ─── Vite Dev Server / Static Asset Serving ───────────────────────────────
   if (process.env.NODE_ENV !== 'production') {
     const vite = await createViteServer({ server: { middlewareMode: true }, appType: 'spa' });
-    app.use(vite.middlewares);
+    serverApp.use(vite.middlewares);
   } else {
-    app.use(express.static(path.join(process.cwd(), 'dist')));
-    app.get('*', (_req, response) => {
+    serverApp.use(express.static(path.join(process.cwd(), 'dist')));
+    serverApp.get('*', (_req, response) => {
       response.sendFile(path.join(process.cwd(), 'dist', 'index.html'));
     });
   }
 
   const PORT = Number(process.env.PORT) || 3000;
-  app.listen(PORT, () => {
+  serverApp.listen(PORT, () => {
     console.log('Kriora LMS API running on http://localhost:' + PORT);
   });
 }
 
-startServer().catch(console.error);
+// Automatically start standalone server if not running inside Vercel serverless environment
+if (process.env.VERCEL !== '1') {
+  startServer().catch(console.error);
+}
+
