@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { RefreshCw, Sparkles } from 'lucide-react';
 import { useAuth, useUser } from '@clerk/clerk-react';
-import { useQuery, useMutation } from 'convex/react';
+import { useQuery, useMutation, useAction } from 'convex/react';
 import { api } from '../convex/_generated/api';
 
 import AuthScreen from './components/AuthScreen';
@@ -50,6 +50,7 @@ export default function App() {
 
   // --- Convex Reactive Queries & Mutations ---
   const bindClerkIdentity = useMutation(api.lms.bindClerkIdentity);
+  const studentTutorChatAction = useAction(api.lms.studentTutorChat);
   const courseMetadataRes = useQuery(
     api.lms.getCourseMetadata,
     clerkEmail ? { courseId: "python-mastery", actorEmail: clerkEmail } : { courseId: "python-mastery" }
@@ -129,27 +130,46 @@ Your RESTRICTIONS:
 
       let tutorReply = "";
 
-      // 1. Try Backend Gateway API
+      // 1. Primary: Direct Convex Cloud Serverless Action
       try {
-        const response = await fetch('/api/chat', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            message: userText,
-            systemInstruction: systemPrompt,
-            history: chatMessages.slice(-6).map(m => ({
-              role: m.sender === 'user' ? 'user' : 'assistant',
-              content: m.text,
-            }))
-          })
+        const convexRes = await studentTutorChatAction({
+          message: userText,
+          systemInstruction: systemPrompt,
+          history: chatMessages.slice(-6).map(m => ({
+            role: m.sender === 'user' ? 'user' : 'assistant',
+            content: m.text,
+          }))
         });
-
-        if (response.ok) {
-          const data = await response.json();
-          if (data.text) tutorReply = data.text;
+        if (convexRes?.text) {
+          tutorReply = convexRes.text;
         }
-      } catch (backendErr) {
-        console.warn("[Student Tutor] Backend unreachable, using direct AI fallback:", backendErr);
+      } catch (convexErr) {
+        console.warn("[Student Tutor] Convex action fallback to Gateway:", convexErr);
+      }
+
+      // 2. Secondary: Backend Gateway API
+      if (!tutorReply) {
+        try {
+          const response = await fetch('/api/chat', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              message: userText,
+              systemInstruction: systemPrompt,
+              history: chatMessages.slice(-6).map(m => ({
+                role: m.sender === 'user' ? 'user' : 'assistant',
+                content: m.text,
+              }))
+            })
+          });
+
+          if (response.ok) {
+            const data = await response.json();
+            if (data.text) tutorReply = data.text;
+          }
+        } catch (backendErr) {
+          console.warn("[Student Tutor] Backend unreachable, using direct AI fallback:", backendErr);
+        }
       }
 
       // 2. Direct Fallback: Client-side Gemini Call

@@ -8,7 +8,7 @@ import {
   Activity, CheckSquare, Award, ArrowUpRight, ChevronDown,
   Filter, MoreHorizontal
 } from "lucide-react";
-import { useQuery, useMutation } from "convex/react";
+import { useQuery, useMutation, useAction } from "convex/react";
 import { useAuth, useUser } from "@clerk/clerk-react";
 import { api } from "../../convex/_generated/api";
 import { Button } from "@/components/ui/button";
@@ -173,6 +173,9 @@ export default function AdminPortal({
     api.lms.getDayContent,
     previewDayId ? { dayId: previewDayId, actorEmail } : "skip"
   );
+
+  // Cloud AI Copilot Action
+  const adminCopilotChatAction = useAction(api.lms.adminCopilotChat);
 
   // Body scroll lock & ESC key listener for Admin Lesson Preview Modal
   useEffect(() => {
@@ -479,78 +482,96 @@ export default function AdminPortal({
     try {
       let replyText = "";
 
-      // 1. Primary: Try Backend Gateway API (/api/admin/chat)
+      // 1. Primary: Direct Convex Cloud Serverless Action (100% cloud connected)
       try {
-        const res = await fetch("/api/admin/chat", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            message: promptText,
-            actorEmail,
-            history: copilotMessages.slice(-6).map((m) => ({
-              role: m.sender === "user" ? "user" : "assistant",
-              content: m.text,
-            })),
-          }),
+        const convexRes = await adminCopilotChatAction({
+          message: promptText,
+          actorEmail,
+          history: copilotMessages.slice(-6).map((m) => ({
+            role: m.sender === "user" ? "user" : "assistant",
+            content: m.text,
+          })),
         });
-
-        if (res.ok) {
-          const data = await res.json();
-          if (data.reply || data.text) {
-            replyText = data.reply || data.text;
-          }
+        if (convexRes?.reply || convexRes?.text) {
+          replyText = convexRes.reply || convexRes.text;
         }
-      } catch (backendErr) {
-        console.warn("[Admin Copilot] Backend endpoint unreachable, switching to direct AI fallback:", backendErr);
+      } catch (convexErr) {
+        console.warn("[Admin Copilot] Convex action fallback to Gateway:", convexErr);
       }
 
-      // 2. Direct Fallback: Client-side Gemini Generation
+      // 2. Secondary: Backend Gateway API (/api/admin/chat)
+      if (!replyText) {
+        try {
+          const res = await fetch("/api/admin/chat", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              message: promptText,
+              actorEmail,
+              history: copilotMessages.slice(-6).map((m) => ({
+                role: m.sender === "user" ? "user" : "assistant",
+                content: m.text,
+              })),
+            }),
+          });
+
+          if (res.ok) {
+            const data = await res.json();
+            if (data.reply || data.text) {
+              replyText = data.reply || data.text;
+            }
+          }
+        } catch (backendErr) {
+          console.warn("[Admin Copilot] Gateway fallback to client AI:", backendErr);
+        }
+      }
+
+      // 3. Tertiary: Client-side Gemini Fallback
       if (!replyText) {
         const geminiKey = (import.meta as any).env?.VITE_GEMINI_API_KEY;
-        if (!geminiKey) {
-          throw new Error("Admin Copilot temporarily unavailable. Please verify backend server is running.");
-        }
-        const systemInstruction = `You are the Kriora LMS Admin Assistant.
+        if (geminiKey) {
+          const systemInstruction = `You are the Kriora LMS Admin Assistant.
 Help the administrator draft announcements, summarize student performance, and plan curriculum topics.
 Provide polished, professional copy ready to publish. Refer to the platform as Kriora LMS.`;
 
-        const contents = [
-          ...copilotMessages.slice(-6).map((m) => ({
-            role: m.sender === "user" ? "user" : "model",
-            parts: [{ text: m.text }],
-          })),
-          {
-            role: "user",
-            parts: [{ text: promptText }],
-          },
-        ];
+          const contents = [
+            ...copilotMessages.slice(-6).map((m) => ({
+              role: m.sender === "user" ? "user" : "model",
+              parts: [{ text: m.text }],
+            })),
+            {
+              role: "user",
+              parts: [{ text: promptText }],
+            },
+          ];
 
-        const models = ["gemini-2.5-flash", "gemini-2.5-flash-lite", "gemini-3.7-flash"];
-        for (const model of models) {
-          try {
-            const geminiRes = await fetch(
-              `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${geminiKey}`,
-              {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({
-                  contents,
-                  systemInstruction: { parts: [{ text: systemInstruction }] },
-                  generationConfig: { temperature: 0.7 },
-                }),
-              }
-            );
+          const models = ["gemini-2.5-flash", "gemini-2.5-flash-lite", "gemini-3.7-flash"];
+          for (const model of models) {
+            try {
+              const geminiRes = await fetch(
+                `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${geminiKey}`,
+                {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({
+                    contents,
+                    systemInstruction: { parts: [{ text: systemInstruction }] },
+                    generationConfig: { temperature: 0.7 },
+                  }),
+                }
+              );
 
-            if (geminiRes.ok) {
-              const geminiData = await geminiRes.json();
-              const text = geminiData?.candidates?.[0]?.content?.parts?.[0]?.text;
-              if (text) {
-                replyText = text;
-                break;
+              if (geminiRes.ok) {
+                const geminiData = await geminiRes.json();
+                const text = geminiData?.candidates?.[0]?.content?.parts?.[0]?.text;
+                if (text) {
+                  replyText = text;
+                  break;
+                }
               }
+            } catch (e) {
+              console.warn(`[Admin Copilot] Direct fallback with ${model} failed:`, e);
             }
-          } catch (e) {
-            console.warn(`[Admin Copilot] Direct fallback with ${model} failed:`, e);
           }
         }
       }

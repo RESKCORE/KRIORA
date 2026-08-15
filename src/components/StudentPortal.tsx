@@ -7,7 +7,7 @@ import {
   Check, ArrowRight, Zap, TrendingUp, CheckSquare, Send, Cpu, Terminal,
   PanelLeftClose, PanelLeftOpen, Copy, BookMarked, Eye, Flame, ArrowLeft
 } from "lucide-react";
-import { useQuery, useMutation } from "convex/react";
+import { useQuery, useMutation, useAction } from "convex/react";
 import { useUser } from "@clerk/clerk-react";
 import { api } from "../../convex/_generated/api";
 import { Button } from "@/components/ui/button";
@@ -145,6 +145,7 @@ export default function StudentPortal({
 
   const updateProgressMut = useMutation(api.lms.updateLessonProgress);
   const submitCodeMut = useMutation(api.lms.submitAssessmentCode);
+  const evaluateAssessmentAction = useAction(api.lms.evaluateAssessment);
 
   const activeDayContent = useQuery(
     api.lms.getDayContent,
@@ -191,25 +192,46 @@ export default function StudentPortal({
 
     try {
       let aiEval: any = null;
+
+      // 1. Primary: Direct Convex Cloud Serverless Action
       try {
-        const evalRes = await fetch("/api/lms/evaluate-test", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            code: assessmentCode,
-            dayNumber: day.dayNumber,
-            dayTitle: day.title,
-            taskDescription: day.content?.workedExample?.caseStudy || day.description || day.title,
-            maxScore: config?.dailyAssessmentMarks || 10,
-            testType: "daily",
-          }),
+        const actionRes = await evaluateAssessmentAction({
+          code: assessmentCode,
+          dayNumber: day.dayNumber,
+          dayTitle: day.title,
+          taskDescription: day.content?.workedExample?.caseStudy || day.description || day.title,
+          maxScore: config?.dailyAssessmentMarks || 10,
+          testType: "daily",
         });
-        if (evalRes.ok) {
-          const data = await evalRes.json();
-          if (data.success) aiEval = data;
+        if (actionRes?.success) {
+          aiEval = actionRes;
         }
-      } catch (e) {
-        console.warn("AI evaluation call failed, falling back to local runner:", e);
+      } catch (convexErr) {
+        console.warn("[Student Evaluation] Convex action fallback to Gateway:", convexErr);
+      }
+
+      // 2. Secondary: Backend Gateway API (/api/lms/evaluate-test)
+      if (!aiEval) {
+        try {
+          const evalRes = await fetch("/api/lms/evaluate-test", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              code: assessmentCode,
+              dayNumber: day.dayNumber,
+              dayTitle: day.title,
+              taskDescription: day.content?.workedExample?.caseStudy || day.description || day.title,
+              maxScore: config?.dailyAssessmentMarks || 10,
+              testType: "daily",
+            }),
+          });
+          if (evalRes.ok) {
+            const data = await evalRes.json();
+            if (data.success) aiEval = data;
+          }
+        } catch (gatewayErr) {
+          console.warn("[Student Evaluation] Gateway call failed, falling back to local runner:", gatewayErr);
+        }
       }
 
       if (aiEval) {

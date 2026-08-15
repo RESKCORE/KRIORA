@@ -60,7 +60,7 @@ async function callGeminiDirect(opts: {
   temperature?: number;
   jsonMode?: boolean;
 }): Promise<string> {
-  const key = process.env.GEMINI_API_KEY;
+  const key = process.env.GEMINI_API_KEY || process.env.VITE_GEMINI_API_KEY;
   if (!key) throw new Error('GEMINI_API_KEY is not configured');
 
   const models = [
@@ -125,7 +125,7 @@ async function callOpenRouterDirect(opts: {
   temperature?: number;
   jsonMode?: boolean;
 }): Promise<string> {
-  const key = process.env.OPENROUTER_API_KEY;
+  const key = process.env.OPENROUTER_API_KEY || process.env.VITE_OPENROUTER_API_KEY;
   if (!key) throw new Error('OPENROUTER_API_KEY is not configured');
 
   const models = [
@@ -182,7 +182,8 @@ async function generateAIWithFallback(opts: {
     throw new Error('No valid messages provided for AI generation');
   }
 
-  if (process.env.GEMINI_API_KEY) {
+  const geminiKey = process.env.GEMINI_API_KEY || process.env.VITE_GEMINI_API_KEY;
+  if (geminiKey) {
     try {
       return await callGeminiDirect({
         system: opts.system,
@@ -195,7 +196,8 @@ async function generateAIWithFallback(opts: {
     }
   }
 
-  if (process.env.OPENROUTER_API_KEY) {
+  const openrouterKey = process.env.OPENROUTER_API_KEY || process.env.VITE_OPENROUTER_API_KEY;
+  if (openrouterKey) {
     try {
       return await callOpenRouterDirect({
         system: opts.system,
@@ -235,7 +237,7 @@ export function createApp() {
   console.log("=================================================");
 
   // ─── AI Chat: Student Tutor ────────────────────────────────────────────────
-  app.post('/api/chat', async (req, res) => {
+  app.post(['/api/chat', '/chat'], async (req, res) => {
     try {
       const { message, systemInstruction, history } = req.body;
       if (!message) return res.status(400).json({ error: 'Message required.' });
@@ -253,7 +255,7 @@ export function createApp() {
   });
 
   // ─── AI Chat: Admin Assistant (Draft Announcements & Lesson Content) ────────
-  app.post('/api/admin/chat', async (req, res) => {
+  app.post(['/api/admin/chat', '/admin/chat'], async (req, res) => {
     try {
       const { message, prompt, history } = req.body;
       const userText = message || prompt;
@@ -278,7 +280,7 @@ Provide polished, professional copy ready to publish. Refer to the platform as K
   });
 
   // ─── Student Assessment Evaluation (AI Marks & Feedback) ───────────────────
-  app.post('/api/lms/evaluate-test', async (req, res) => {
+  app.post(['/api/lms/evaluate-test', '/lms/evaluate-test', '/evaluate-test'], async (req, res) => {
     try {
       const {
         code,

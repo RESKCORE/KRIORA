@@ -1,6 +1,6 @@
-import { query, mutation } from "./_generated/server";
+import { query, mutation, action } from "./_generated/server";
 import { v } from "convex/values";
-import type { QueryCtx, MutationCtx } from "./_generated/server";
+import type { QueryCtx, MutationCtx, ActionCtx } from "./_generated/server";
 
 // ─── ADMIN CONFIGURATION ──────────────────────────────────────────────────
 const DEFAULT_ADMIN_EMAILS = [
@@ -1185,6 +1185,223 @@ export const lockDayForBatch = mutation({
     });
 
     return { success: true };
+  },
+});
+
+// ─── CONVEX SERVERLESS AI ENGINE ──────────────────────────────────────────
+
+async function generateConvexAI(opts: {
+  system?: string;
+  messages: { role: string; content: string }[];
+  temperature?: number;
+  jsonMode?: boolean;
+}): Promise<string> {
+  const geminiKey = process.env.GEMINI_API_KEY || process.env.VITE_GEMINI_API_KEY;
+  if (geminiKey) {
+    const models = ["gemini-2.5-flash", "gemini-2.5-flash-lite", "gemini-3.7-flash", "gemini-flash-latest"];
+    const contents = opts.messages.map((m) => ({
+      role: m.role === "assistant" || m.role === "model" ? "model" : "user",
+      parts: [{ text: m.content }],
+    }));
+    const systemInstruction = opts.system ? { parts: [{ text: opts.system }] } : undefined;
+
+    for (const model of models) {
+      try {
+        const res = await fetch(
+          `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${geminiKey}`,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              contents,
+              ...(systemInstruction ? { systemInstruction } : {}),
+              generationConfig: {
+                temperature: opts.temperature ?? 0.7,
+                ...(opts.jsonMode ? { responseMimeType: "application/json" } : {}),
+              },
+            }),
+          }
+        );
+        if (res.ok) {
+          const data = await res.json();
+          const text = data?.candidates?.[0]?.content?.parts?.[0]?.text;
+          if (text) return text;
+        }
+      } catch (err) {
+        console.warn(`[Convex AI] Gemini ${model} failed:`, err);
+      }
+    }
+  }
+
+  const openrouterKey = process.env.OPENROUTER_API_KEY || process.env.VITE_OPENROUTER_API_KEY;
+  if (openrouterKey) {
+    const models = ["openrouter/free", "google/gemini-2.0-flash-lite-preview-02-05:free", "meta-llama/llama-3.3-70b-instruct"];
+    const messages = opts.system
+      ? [{ role: "system", content: opts.system }, ...opts.messages]
+      : opts.messages;
+
+    for (const model of models) {
+      try {
+        const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${openrouterKey}`,
+          },
+          body: JSON.stringify({
+            model,
+            messages,
+            temperature: opts.temperature ?? 0.7,
+            ...(opts.jsonMode ? { response_format: { type: "json_object" } } : {}),
+          }),
+        });
+        if (res.ok) {
+          const data = await res.json();
+          const text = data?.choices?.[0]?.message?.content;
+          if (text) return text;
+        }
+      } catch (err) {
+        console.warn(`[Convex AI] OpenRouter ${model} failed:`, err);
+      }
+    }
+  }
+
+  throw new Error("AI generation services are currently unavailable. Please verify API configuration.");
+}
+
+export const adminCopilotChat = action({
+  args: {
+    message: v.string(),
+    actorEmail: v.optional(v.string()),
+    history: v.optional(
+      v.array(
+        v.object({
+          role: v.string(),
+          content: v.string(),
+        })
+      )
+    ),
+  },
+  handler: async (_ctx, args) => {
+    const system = `You are the Kriora LMS Admin Copilot with autonomous platform execution capabilities.
+Help the administrator draft announcements, summarize batch performance, explain platform metrics, and plan curriculum topics.
+Provide polished, professional copy ready to publish. Refer to the platform as Kriora LMS.`;
+
+    const allMsgs = [...(args.history || []), { role: "user", content: args.message }];
+    const text = await generateConvexAI({
+      system,
+      messages: allMsgs,
+      temperature: 0.7,
+    });
+
+    return { success: true, text, reply: text };
+  },
+});
+
+export const studentTutorChat = action({
+  args: {
+    message: v.string(),
+    systemInstruction: v.optional(v.string()),
+    history: v.optional(
+      v.array(
+        v.object({
+          role: v.string(),
+          content: v.string(),
+        })
+      )
+    ),
+  },
+  handler: async (_ctx, args) => {
+    const system =
+      args.systemInstruction ||
+      "You are a helpful and patient Python programming tutor for Kriora LMS. Keep explanations clear, encouraging, and focused on learning.";
+    const allMsgs = [...(args.history || []), { role: "user", content: args.message }];
+    const text = await generateConvexAI({
+      system,
+      messages: allMsgs,
+      temperature: 0.7,
+    });
+    return { success: true, text };
+  },
+});
+
+export const evaluateAssessment = action({
+  args: {
+    code: v.string(),
+    dayNumber: v.optional(v.number()),
+    dayTitle: v.optional(v.string()),
+    taskDescription: v.optional(v.string()),
+    maxScore: v.optional(v.number()),
+    testType: v.optional(v.string()),
+  },
+  handler: async (_ctx, args) => {
+    const maxScore = args.maxScore ?? 10;
+    const prompt = `You are an expert Python programming instructor and evaluator for Kriora LMS.
+Evaluate the student's Python code submission fairly, accurately, and thoroughly.
+
+ASSESSMENT CONTEXT:
+- Test Type: ${args.testType || "daily"}
+- Day Number: ${args.dayNumber ?? "N/A"}
+- Topic/Day Title: ${args.dayTitle ?? "Python Assessment"}
+- Task / Problem Description: ${args.taskDescription || "Python Daily Coding Assessment"}
+- Max Possible Marks: ${maxScore}
+
+STUDENT'S SUBMITTED PYTHON CODE:
+\`\`\`python
+${args.code}
+\`\`\`
+
+EVALUATION RULES:
+1. Check valid syntax, indentation, and logic correctness.
+2. Award fair marks between 0 and ${maxScore}.
+3. Return valid JSON only.
+
+JSON schema:
+{
+  "score": <number between 0 and ${maxScore}>,
+  "percentage": <integer between 0 and 100>,
+  "passedTests": <integer>,
+  "failedTests": <integer>,
+  "feedback": "<constructive feedback string>",
+  "evalResults": [
+    {
+      "input": "<criterion or scenario tested>",
+      "expected": "<expected behavior>",
+      "actual": "<student's code behavior>",
+      "pass": <boolean>
+    }
+  ]
+}`;
+
+    const rawResponse = await generateConvexAI({
+      messages: [{ role: "user", content: prompt }],
+      temperature: 0.2,
+      jsonMode: true,
+    });
+
+    const jsonMatch = rawResponse.match(/\{[\s\S]*\}/);
+    if (!jsonMatch) throw new Error("AI evaluation did not return valid JSON");
+    const parsed = JSON.parse(jsonMatch[0]);
+
+    const score =
+      typeof parsed.score === "number"
+        ? Math.min(Math.max(0, Math.round(parsed.score * 10) / 10), maxScore)
+        : Math.round(maxScore * 0.8);
+    const percentage =
+      typeof parsed.percentage === "number"
+        ? Math.min(Math.max(0, Math.round(parsed.percentage)), 100)
+        : Math.round((score / maxScore) * 100);
+
+    return {
+      success: true,
+      score,
+      maxScore,
+      percentage,
+      passedTests: parsed.passedTests ?? (percentage >= 70 ? 1 : 0),
+      failedTests: parsed.failedTests ?? (percentage >= 70 ? 0 : 1),
+      feedback: parsed.feedback || `Scored ${score}/${maxScore} (${percentage}%).`,
+      evalResults: parsed.evalResults || [],
+    };
   },
 });
 
