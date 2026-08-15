@@ -34,6 +34,14 @@ function getAuditEmail(fallback?: string): string {
   return normalizeEmail(fallback) || ADMIN_EMAILS[0];
 }
 
+export function getAdminAuthorName(email?: string): string {
+  const norm = normalizeEmail(email);
+  if (norm === "suchandramanne@gmail.com") return "Suchandra Manne (Admin)";
+  if (norm === "reddysantosh1310@gmail.com") return "Santosh Reddy (Director Admin)";
+  if (norm) return `${norm.split("@")[0]} (Admin)`;
+  return "Director Admin";
+}
+
 // ─── AUTHENTICATION & AUTHORIZATION HELPERS ───────────────────────────────
 
 function normalizeEmail(email?: string) {
@@ -1387,11 +1395,12 @@ Respond ONLY with valid JSON in this exact structure:
           const annData = JSON.parse(jsonMatch[0]);
           if (annData.title && annData.content) {
             const adminEmail = args.actorEmail || ADMIN_EMAILS[0];
+            const author = getAdminAuthorName(adminEmail);
             await ctx.runMutation(api.lms.upsertAnnouncement, {
               actorEmail: adminEmail,
               title: annData.title,
               content: annData.content,
-              author: "Director Admin",
+              author,
               isPinned: !!annData.isPinned,
             });
 
