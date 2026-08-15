@@ -13,7 +13,7 @@ const ADMIN_EMAILS = (
   process.env.ADMIN_EMAIL ||
   process.env.VITE_ADMIN_EMAILS ||
   process.env.VITE_ADMIN_EMAIL ||
-  'reddysantosh1310@gmail.com,suchandramanne@gmail.com'
+  ''
 )
   .split(',')
   .map(e => e.trim().toLowerCase())
@@ -228,24 +228,25 @@ async function startServer() {
   // ─── AI Chat: Admin Assistant (Draft Announcements & Lesson Content) ────────
   app.post('/api/admin/chat', async (req, res) => {
     try {
-      const { message, history } = req.body;
-      if (!message) return res.status(400).json({ error: 'Message required.' });
+      const { message, prompt, history } = req.body;
+      const userText = message || prompt;
+      if (!userText) return res.status(400).json({ error: 'Message required.' });
       
       const system = `You are the Kriora LMS Admin Assistant.
 Help the administrator draft announcements, summarize student performance, and plan curriculum topics.
 Provide polished, professional copy ready to publish. Refer to the platform as Kriora LMS.`;
 
-      const allMsgs = [...(history || []), { role: 'user', content: message }];
+      const allMsgs = [...(history || []), { role: 'user', content: userText }];
       const text = await generateAIWithFallback({
         system,
         messages: allMsgs,
         temperature: 0.7,
       });
 
-      res.json({ text });
+      res.json({ success: true, text, reply: text });
     } catch (err: any) {
       console.error('[Admin Chat API Error]:', err);
-      res.status(500).json({ error: err.message || 'Admin assistant failed.' });
+      res.status(500).json({ success: false, error: err.message || 'Admin assistant failed.' });
     }
   });
 
@@ -361,29 +362,7 @@ Return a valid JSON object ONLY:
     }
   });
 
-  // ─── Python Compiler Sandbox Fallback ──────────────────────────────────────
-  app.post('/api/compiler/execute', async (req, res) => {
-    try {
-      const { code } = req.body;
-      if (!code || !code.trim()) return res.status(400).json({ error: 'No code provided.' });
-      
-      const dangerousPatterns = [/import\s+os/, /import\s+subprocess/, /import\s+sys/, /__import__/, /open\s*\(/, /exec\s*\(/, /eval\s*\(/, /compile\s*\(/, /getattr/, /setattr/, /globals\s*\(/, /locals\s*\(/];
-      const blocked = dangerousPatterns.some(p => p.test(code));
-      if (blocked) {
-        return res.json({ success: false, error: 'Code contains restricted operations.', output: '', executionMs: 0, status: 'blocked' });
-      }
 
-      return res.json({
-        success: false,
-        output: '',
-        error: 'In-browser Pyodide WebAssembly is the primary execution engine.',
-        status: 'sandbox-not-ready',
-        executionMs: 0,
-      });
-    } catch (err: any) {
-      res.status(500).json({ error: err.message });
-    }
-  });
 
   // ─── Gemini Course Content Generation (Admin Only) ─────────────────────────
   async function verifyAdmin(req: express.Request): Promise<string> {

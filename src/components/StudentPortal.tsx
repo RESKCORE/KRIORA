@@ -102,7 +102,39 @@ export default function StudentPortal({
   const [assessmentBusy, setAssessmentBusy] = useState(false);
   const [assessmentResult, setAssessmentResult] = useState<any | null>(null);
   const [evalStatus, setEvalStatus] = useState<"idle" | "running" | "done" | "error">("idle");
-  const [certification, setCertification] = useState<{ dailyPerformance: number; finalExamScore: number; dailyTestsTaken: number; dailyTestsTotal: number; dailyThreshold: number; finalThreshold: number; eligible: boolean; finalExamSubmitted: boolean } | null>(null);
+
+  // ── Track Seen Announcements for Student ────────────────────────────────
+  const [seenAnnouncementIds, setSeenAnnouncementIds] = useState<string[]>(() => {
+    if (typeof window !== "undefined" && (student?.id || student?.email)) {
+      try {
+        const key = `kriora_seen_announcements_${student.id || student.email}`;
+        const stored = localStorage.getItem(key);
+        return stored ? JSON.parse(stored) : [];
+      } catch (e) {
+        return [];
+      }
+    }
+    return [];
+  });
+
+  // When student views the announcements tab, mark all current announcements as seen
+  useEffect(() => {
+    if (activeTab === "announcements" && announcements.length > 0) {
+      const allIds = announcements.map((a) => a.id);
+      setSeenAnnouncementIds((prev) => {
+        const merged = Array.from(new Set([...prev, ...allIds]));
+        if (typeof window !== "undefined" && (student?.id || student?.email)) {
+          try {
+            localStorage.setItem(
+              `kriora_seen_announcements_${student.id || student.email}`,
+              JSON.stringify(merged)
+            );
+          } catch (e) {}
+        }
+        return merged;
+      });
+    }
+  }, [activeTab, announcements, student?.id, student?.email]);
 
   const updateProgressMut = useMutation(api.lms.updateLessonProgress);
   const submitCodeMut = useMutation(api.lms.submitAssessmentCode);
@@ -143,33 +175,6 @@ export default function StudentPortal({
     : availableDays.length;
   const finalExamOpen = studentBatch && batchIsLive && batchGranted("final-master-exam");
   const daySubmission = (dayId: string) => testSubmissions.find((s) => s.studentId === student.id && s.dayId === dayId && s.testType === "daily");
-
-  useEffect(() => {
-    if (student.batchId) {
-      const dailySubs = testSubmissions.filter((s) => s.studentId === student.id && s.testType === "daily" && s.score !== undefined);
-      const totalScore = dailySubs.reduce((sum, s) => sum + (s.score || 0), 0);
-      const totalMax = dailySubs.reduce((sum, s) => sum + (s.maxScore || 10), 0);
-      const dailyPerf = totalMax > 0 ? Math.round((totalScore / totalMax) * 100) : 0;
-
-      const finalSub = testSubmissions.find((s) => s.studentId === student.id && s.testType === "final");
-      const finalScore = finalSub?.percentage ?? (finalSub?.score ? Math.round((finalSub.score / (finalSub.maxScore || 100)) * 100) : 0);
-
-      const dailyThreshold = config?.dailyPerfThreshold || 70;
-      const finalThreshold = config?.finalExamThreshold || 80;
-      const eligible = dailyPerf >= dailyThreshold && finalScore >= finalThreshold;
-
-      setCertification({
-        dailyPerformance: dailyPerf,
-        finalExamScore: finalScore,
-        dailyTestsTaken: dailySubs.length,
-        dailyTestsTotal: totalDays,
-        dailyThreshold,
-        finalThreshold,
-        eligible,
-        finalExamSubmitted: !!finalSub,
-      });
-    }
-  }, [student, testSubmissions, config, totalDays]);
 
   const submitAssessment = async (day: CourseDay) => {
     if (!assessmentCode.trim()) return;
@@ -337,10 +342,14 @@ export default function StudentPortal({
     ? { ...activeDayRaw, content: activeDayContent || activeDayRaw.content }
     : undefined;
 
+  const unreadAnnouncementsCount = announcements.filter(
+    (a) => !seenAnnouncementIds.includes(a.id)
+  ).length;
+
   const navItems = [
     { id: "dashboard" as TabId, label: "Overview", icon: Layers },
     { id: "course" as TabId, label: "Syllabus", icon: BookOpen },
-    { id: "announcements" as TabId, label: "Announcements", icon: Bell, badge: announcements.length },
+    { id: "announcements" as TabId, label: "Announcements", icon: Bell, badge: unreadAnnouncementsCount },
     { id: "settings" as TabId, label: "Profile", icon: User },
   ];
 
@@ -358,36 +367,42 @@ export default function StudentPortal({
         }`}
       >
         {/* Brand Header */}
-        <div className={`p-4 border-b border-slate-100 flex items-center justify-between ${sidebarCollapsed ? "justify-center" : ""}`}>
-          <div className="flex items-center gap-3">
+        <div className={`h-16 border-b border-slate-100 flex items-center ${sidebarCollapsed ? "justify-center px-2" : "justify-between px-4"}`}>
+          <button
+            onClick={() => sidebarCollapsed && setSidebarCollapsed(false)}
+            className="flex items-center gap-3 shrink-0 group focus:outline-none text-left"
+            title={sidebarCollapsed ? "Expand Sidebar" : undefined}
+          >
             <img
-              src="/KRIORA_LOGO.png"
+              src="/KRIORA_LOGO_2.png"
               alt="Kriora Logo"
-              className="w-9 h-9 rounded-full object-cover shadow-md shadow-orange-500/20 shrink-0 border border-orange-200 ring-2 ring-orange-500/20"
+              className="w-10 h-10 rounded-full object-cover shadow-md shadow-orange-500/20 shrink-0 border border-orange-200 ring-2 ring-orange-500/20 group-hover:scale-105 transition-transform"
             />
             {!sidebarCollapsed && (
               <div>
                 <h1 className="font-extrabold text-sm text-slate-900 leading-tight">Kriora LMS</h1>
-                <span className="text-[10px] font-semibold text-orange-600 bg-orange-50 px-2 py-0.5 rounded-full border border-orange-200/60">
+                <span className="text-[10px] font-semibold text-orange-600 bg-orange-50 px-2 py-0.5 rounded-full border border-orange-200/60 inline-block mt-0.5">
                   Student Portal
                 </span>
               </div>
             )}
-          </div>
-
-          <button
-            onClick={() => setSidebarCollapsed(!sidebarCollapsed)}
-            title={sidebarCollapsed ? "Expand Sidebar" : "Collapse Sidebar"}
-            className="p-1.5 rounded-lg text-slate-400 hover:text-slate-900 hover:bg-slate-100 transition-colors hidden md:block"
-          >
-            {sidebarCollapsed ? <PanelLeftOpen className="w-4 h-4" /> : <PanelLeftClose className="w-4 h-4" />}
           </button>
+
+          {!sidebarCollapsed && (
+            <button
+              onClick={() => setSidebarCollapsed(true)}
+              title="Collapse Sidebar"
+              className="p-1.5 rounded-lg text-slate-400 hover:text-slate-900 hover:bg-slate-100 transition-colors hidden md:block"
+            >
+              <PanelLeftClose className="w-4 h-4" />
+            </button>
+          )}
         </div>
 
         {/* User Card */}
         <div className={`p-3 bg-slate-50/80 border border-slate-200/60 mx-2.5 my-3 rounded-2xl flex items-center gap-3 shadow-2xs ${sidebarCollapsed ? "justify-center px-2" : ""}`}>
-          <Avatar className="w-9 h-9 ring-2 ring-orange-500/20 shadow-2xs shrink-0">
-            <AvatarImage src={user?.imageUrl} alt={student.fullName} />
+          <Avatar className="w-10 h-10 ring-2 ring-orange-500/20 shadow-2xs shrink-0 border border-orange-200">
+            <AvatarImage src={user?.imageUrl} alt={student.fullName} className="object-cover" />
             <AvatarFallback className="bg-orange-100 text-[#FF5A36] font-extrabold text-xs">
               {student.fullName?.slice(0, 2).toUpperCase() || "ST"}
             </AvatarFallback>
@@ -1342,10 +1357,17 @@ export default function StudentPortal({
           ═══════════════════════════════════════════════════════════════════ */}
           {activeTab === "announcements" && (
             <div className="space-y-4">
-              <PageHeader
-                title="Cohort Announcements"
-                subtitle="Important updates, assignment notices, and broadcast messages from instructors"
-              />
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                <PageHeader
+                  title="Cohort Announcements"
+                  subtitle="Important updates, assignment notices, and broadcast messages from instructors"
+                />
+                {announcements.length > 0 && (
+                  <span className="text-xs font-semibold text-emerald-700 bg-emerald-50 px-3 py-1.5 rounded-full border border-emerald-200/60 inline-flex items-center gap-1.5 w-fit">
+                    <Check className="w-3.5 h-3.5" /> All Announcements Seen
+                  </span>
+                )}
+              </div>
 
               {announcements.length === 0 ? (
                 <EmptyState
@@ -1355,7 +1377,7 @@ export default function StudentPortal({
               ) : (
                 <div className="space-y-3">
                   {announcements.map((ann) => (
-                    <Card key={ann.id} className="shadow-2xs border-slate-200/80 rounded-2xl overflow-hidden">
+                    <Card key={ann.id} className="shadow-2xs border-slate-200/80 rounded-2xl overflow-hidden bg-white">
                       <CardHeader className="flex flex-row items-center justify-between border-b border-slate-100 pb-3">
                         <div className="flex items-center gap-3">
                           <div className="w-8 h-8 rounded-full bg-orange-100 text-orange-600 flex items-center justify-center font-black text-xs">
@@ -1366,9 +1388,14 @@ export default function StudentPortal({
                             <span className="text-[10px] font-mono text-slate-400">By {ann.author}</span>
                           </div>
                         </div>
-                        <span className="text-[11px] font-mono text-slate-400">
-                          {new Date(ann.publishedAt).toLocaleDateString()}
-                        </span>
+                        <div className="flex items-center gap-2">
+                          <span className="text-[10px] font-semibold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-full border border-emerald-200/60 flex items-center gap-1">
+                            <Check className="w-3 h-3" /> Seen
+                          </span>
+                          <span className="text-[11px] font-mono text-slate-400">
+                            {new Date(ann.publishedAt).toLocaleDateString()}
+                          </span>
+                        </div>
                       </CardHeader>
                       <CardContent className="pt-4">
                         <p className="text-xs text-slate-700 leading-relaxed whitespace-pre-wrap">{ann.content}</p>

@@ -48,6 +48,17 @@ export default function AdminPortal({
   const { user } = useUser();
   const [activeTab, setActiveTab] = useState<AdminTab>("dashboard");
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  useEffect(() => {
+    if (typeof document !== "undefined") {
+      const root = document.documentElement;
+      root.classList.remove("dark");
+      root.setAttribute("data-theme", "light");
+      try {
+        localStorage.removeItem("kriora_theme");
+      } catch (_) {}
+    }
+  }, []);
+
   const [studentSearch, setStudentSearch] = useState("");
   const [studentStatusFilter, setStudentStatusFilter] = useState("All");
   const [studentBatchFilter, setStudentBatchFilter] = useState("All");
@@ -65,8 +76,7 @@ export default function AdminPortal({
 
   // Convex mutations
   const studentActionMut = useMutation(api.lms.studentAdminAction);
-  const setDayReleaseStatusMut = useMutation(api.lms.setDayReleaseStatus);
-  const addDayMut = useMutation(api.lms.addDay);
+  const registerStudentMut = useMutation(api.lms.registerStudent);
   const saveBatchMut = useMutation(api.lms.saveBatch);
   const deleteBatchMut = useMutation(api.lms.deleteBatch);
   const enrollStudentMut = useMutation(api.lms.enrollStudentInBatch);
@@ -74,7 +84,6 @@ export default function AdminPortal({
   const releaseDayToBatchMut = useMutation(api.lms.releaseDayToBatch);
   const lockDayForBatchMut = useMutation(api.lms.lockDayForBatch);
   const gradeSubmissionMut = useMutation(api.lms.gradeSubmission);
-  const saveTopicMut = useMutation(api.lms.saveTopic);
   const upsertAnnMut = useMutation(api.lms.upsertAnnouncement);
   const deleteAnnMut = useMutation(api.lms.deleteAnnouncement);
   const saveConfigMut = useMutation(api.lms.saveLMSConfig);
@@ -84,8 +93,7 @@ export default function AdminPortal({
   };
 
   const runStudentActionMut = withActorEmail(studentActionMut);
-  const runSetDayReleaseStatusMut = withActorEmail(setDayReleaseStatusMut);
-  const runAddDayMut = withActorEmail(addDayMut);
+  const runRegisterStudentMut = withActorEmail(registerStudentMut);
   const runSaveBatchMut = withActorEmail(saveBatchMut);
   const runDeleteBatchMut = withActorEmail(deleteBatchMut);
   const runEnrollStudentMut = withActorEmail(enrollStudentMut);
@@ -93,7 +101,6 @@ export default function AdminPortal({
   const runReleaseDayToBatchMut = withActorEmail(releaseDayToBatchMut);
   const runLockDayForBatchMut = withActorEmail(lockDayForBatchMut);
   const runGradeSubmissionMut = withActorEmail(gradeSubmissionMut);
-  const runSaveTopicMut = withActorEmail(saveTopicMut);
   const runUpsertAnnMut = withActorEmail(upsertAnnMut);
   const runDeleteAnnMut = withActorEmail(deleteAnnMut);
   const runSaveConfigMut = withActorEmail(saveConfigMut);
@@ -120,25 +127,18 @@ export default function AdminPortal({
   const [transferBatchId, setTransferBatchId] = useState("");
   const [gradeInputs, setGradeInputs] = useState<Record<string, string>>({});
   const [gradeFeedback, setGradeFeedback] = useState<Record<string, string>>({});
-  const [gradeCriteria, setGradeCriteria] = useState<Record<string, Record<string, string>>>({});
   const [busy, setBusy] = useState(false);
   const [aiEvaluatingId, setAiEvaluatingId] = useState<string | null>(null);
 
   // Content management state
   const [selectedCourseId, setSelectedCourseId] = useState<string>("python-mastery");
   const [selectedModuleId, setSelectedModuleId] = useState<string>("");
-  const [addDayForm, setAddDayForm] = useState({ title: "", description: "", dayNumber: "", assessmentKey: "" });
-  const [showAddDay, setShowAddDay] = useState(false);
-  const [releasingDayId, setReleasingDayId] = useState<string | null>(null);
 
   // Course Content viewer state
   const [contentDayId, setContentDayId] = useState<string>("");
   const [contentSearch, setContentSearch] = useState("");
   const [contentModuleFilter, setContentModuleFilter] = useState<string>("");
   const [contentStatusFilter, setContentStatusFilter] = useState<string>("all");
-  const [editingTopicId, setEditingTopicId] = useState<string | null>(null);
-  const [topicDraft, setTopicDraft] = useState<Partial<Topic>>({});
-  const [expandedInstId, setExpandedInstId] = useState<string | null>(null);
   const [previewDayId, setPreviewDayId] = useState<string | null>(null);
   const [previewTopicId, setPreviewTopicId] = useState<string | null>(null);
 
@@ -263,35 +263,6 @@ export default function AdminPortal({
   };
 
   // ── Content Release ────────────────────────────────────────────────────────
-  const handleRelease = async (dayId: string, action: "release" | "lock") => {
-    setReleasingDayId(dayId);
-    try {
-      await runSetDayReleaseStatusMut({ dayId, releaseStatus: action === "release" ? "unlocked" : "locked" });
-    } catch (err: any) {
-      alert(err.message || "Release action failed");
-    }
-    setReleasingDayId(null);
-  };
-
-  // ── Add Day ────────────────────────────────────────────────────────────────
-  const handleAddDay = async () => {
-    if (!addDayForm.title.trim() || !selectedModuleId) return;
-    try {
-      await runAddDayMut({
-        courseId: selectedCourseId,
-        moduleId: selectedModuleId,
-        dayNumber: parseInt(addDayForm.dayNumber, 10) || (allDays.length + 1),
-        title: addDayForm.title,
-        description: addDayForm.description,
-        assessmentKey: addDayForm.assessmentKey.trim() || undefined,
-      });
-      setAddDayForm({ title: "", description: "", dayNumber: "", assessmentKey: "" });
-      setShowAddDay(false);
-    } catch (err: any) {
-      alert(err.message || "Could not add day");
-    }
-  };
-
   // ── Batch helpers ──────────────────────────────────────────────────────────
   const todayStr = () => new Date().toISOString().slice(0, 10);
   const batchStatus = (b: Batch): Batch["status"] => {
@@ -307,27 +278,6 @@ export default function AdminPortal({
       .reduce((mx, a) => Math.max(mx, a.dayNumber), 0);
   const batchReleased = (batchId: string, dayId: string, studentId?: string) =>
     dayAccess.some((a) => a.batchId === batchId && a.dayId === dayId && (a.studentId || null) === (studentId || null));
-  
-  const statusChip = (st: string) => (
-    <span className={"text-[10px] font-bold px-2 py-0.5 rounded-full uppercase tracking-wider " + 
-      (st === "active" ? "bg-emerald-500/10 text-emerald-600 border border-emerald-500/20" : 
-       st === "upcoming" ? "bg-blue-500/10 text-blue-600 border border-blue-500/20" : 
-       st === "completed" ? "bg-slate-100 text-slate-600 border border-slate-200" : "bg-red-50 text-red-600 border border-red-200")}>
-      {st}
-    </span>
-  );
-
-  const studentStatusChip = (st: string) => (
-    <span className={"inline-flex items-center gap-1 text-[11px] font-bold px-2.5 py-0.5 rounded-full " + 
-      (st === "Approved" ? "bg-emerald-50 text-emerald-700 border border-emerald-200" : 
-       st === "Pending" ? "bg-amber-50 text-amber-700 border border-amber-200" : 
-       st === "Suspended" ? "bg-rose-50 text-rose-700 border border-rose-200" : "bg-red-50 text-red-600 border border-red-200")}>
-      <span className={`w-1.5 h-1.5 rounded-full ${
-        st === "Approved" ? "bg-emerald-500" : st === "Pending" ? "bg-amber-500" : "bg-rose-500"
-      }`} />
-      {st}
-    </span>
-  );
 
   const studentSubs = (studentId: string) => testSubmissions.filter((s) => s.studentId === studentId);
   const studentDailyPct = (studentId: string) => {
@@ -524,32 +474,28 @@ export default function AdminPortal({
     setCopilotTyping(true);
 
     try {
-      const res = await fetch("/api/lms/admin-copilot", {
+      const res = await fetch("/api/admin/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          prompt: promptText,
+          message: promptText,
           actorEmail,
-          currentContext: {
-            studentsCount: students.length,
-            pendingStudentsCount: pendingStudents.length,
-            batchesCount: batches.length,
-            announcementsCount: announcements.length,
-            testSubmissionsCount: testSubmissions.length,
-            activeBatches: batches.map(b => ({ id: b.id, name: b.name, capacity: b.capacity })),
-          }
+          history: copilotMessages.slice(-6).map((m) => ({
+            role: m.sender === "user" ? "user" : "assistant",
+            content: m.text,
+          })),
         }),
       });
 
       const data = await res.json();
-      if (!res.ok || !data.success) {
+      if (!res.ok || (!data.text && !data.reply && !data.success)) {
         throw new Error(data.error || "Copilot could not process request");
       }
 
       const aiMsg: CopilotMsg = {
         id: "ai-" + Date.now(),
         sender: "ai",
-        text: data.reply || data.message || "Here is your response.",
+        text: data.reply || data.text || data.message || "Here is your response.",
       };
       setCopilotMessages((prev) => [...prev, aiMsg]);
     } catch (err: any) {
@@ -597,33 +543,39 @@ export default function AdminPortal({
     <div className="min-h-screen w-full flex bg-[#F8F9FB] text-slate-900 font-sans antialiased">
       {/* ── White / Light Collapsible Sidebar ─────────────────────────── */}
       <aside 
-        className={`${
-          sidebarCollapsed ? "w-[76px]" : "w-[260px]"
-        } bg-white text-slate-700 shrink-0 flex flex-col transition-all duration-300 ease-in-out border-r border-slate-200/80 z-30 sticky top-0 h-screen select-none`}
+        className={`${ sidebarCollapsed ? "w-20" : "w-64" } bg-white text-slate-700 shrink-0 flex flex-col transition-all duration-300 ease-in-out border-r border-slate-200/80 z-30 sticky top-0 h-screen select-none`}
       >
         {/* Brand Header & Toggle */}
-        <div className="h-16 px-4 flex items-center justify-between border-b border-slate-100">
-          <div className="flex items-center gap-3 overflow-hidden">
+        <div className={`h-16 border-b border-slate-100 flex items-center ${sidebarCollapsed ? "justify-center px-2" : "justify-between px-4"}`}>
+          <button
+            onClick={() => sidebarCollapsed && setSidebarCollapsed(false)}
+            className="flex items-center gap-3 shrink-0 group focus:outline-none text-left"
+            title={sidebarCollapsed ? "Expand Sidebar" : undefined}
+          >
             <img
-              src="/KRIORA_LOGO.png"
+              src="/KRIORA_LOGO_2.png"
               alt="Kriora Logo"
-              className="w-9 h-9 rounded-full object-cover shadow-md shadow-orange-500/20 shrink-0 border border-orange-200 ring-2 ring-orange-500/20"
+              className="w-10 h-10 rounded-full object-cover shadow-md shadow-orange-500/20 shrink-0 border border-orange-200 ring-2 ring-orange-500/20 group-hover:scale-105 transition-transform"
             />
             {!sidebarCollapsed && (
               <div className="transition-opacity duration-200">
                 <h1 className="font-extrabold text-sm text-slate-900 leading-tight tracking-tight">Kriora LMS</h1>
-                <p className="text-[10px] text-slate-400 font-medium">Admin Operations</p>
+                <span className="text-[10px] font-semibold text-orange-600 bg-orange-50 px-2 py-0.5 rounded-full border border-orange-200/60 inline-block mt-0.5">
+                  Admin Operations
+                </span>
               </div>
             )}
-          </div>
-          
-          <button
-            onClick={() => setSidebarCollapsed(!sidebarCollapsed)}
-            className="p-1.5 rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition-colors"
-            title={sidebarCollapsed ? "Expand Sidebar" : "Collapse Sidebar"}
-          >
-            {sidebarCollapsed ? <ChevronRight className="w-4 h-4" /> : <ChevronLeft className="w-4 h-4" />}
           </button>
+          
+          {!sidebarCollapsed && (
+            <button
+              onClick={() => setSidebarCollapsed(true)}
+              className="p-1.5 rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition-colors"
+              title="Collapse Sidebar"
+            >
+              <ChevronLeft className="w-4 h-4" />
+            </button>
+          )}
         </div>
 
         {/* Navigation List */}
@@ -638,23 +590,15 @@ export default function AdminPortal({
                   key={it.id}
                   onClick={() => setActiveTab(it.id)}
                   title={sidebarCollapsed ? it.label : undefined}
-                  className={`w-full flex items-center ${
-                    sidebarCollapsed ? "justify-center px-0" : "justify-between px-3"
-                  } py-2.5 rounded-xl text-xs font-semibold transition-all relative group ${
-                    active
-                      ? "bg-orange-50 text-[#FF5A36] font-bold shadow-2xs before:absolute before:left-0 before:top-2 before:bottom-2 before:w-1 before:bg-[#FF5A36] before:rounded-r"
-                      : "text-slate-600 hover:text-slate-900 hover:bg-slate-50"
-                  }`}
+                  className={`w-full flex items-center ${ sidebarCollapsed ? "justify-center px-0 py-3" : "justify-between px-3.5 py-2.5" } rounded-xl text-xs font-semibold transition-all relative group ${ active ? "bg-orange-50 text-[#FF5A36] font-bold shadow-2xs before:absolute before:left-0 before:top-2 before:bottom-2 before:w-1 before:bg-[#FF5A36] before:rounded-r" : "text-slate-600 hover:text-slate-900 hover:bg-slate-50 " }`}
                 >
                   <div className="flex items-center gap-3">
-                    <Icon className={`w-4 h-4 shrink-0 transition-colors ${active ? "text-[#FF5A36]" : "text-slate-400 group-hover:text-slate-700"}`} />
+                    <Icon className={`w-4 h-4 shrink-0 transition-colors ${active ? "text-[#FF5A36]" : "text-slate-400 group-hover:text-slate-700 "}`} />
                     {!sidebarCollapsed && <span>{it.label}</span>}
                   </div>
                   
                   {!sidebarCollapsed && it.badge !== undefined && it.badge > 0 && (
-                    <span className={`px-2 py-0.5 text-[10px] rounded-full font-mono font-bold ${
-                      active ? "bg-[#FF5A36] text-white" : "bg-slate-100 text-slate-600"
-                    }`}>
+                    <span className={`px-2 py-0.5 text-[10px] rounded-full font-mono font-bold ${ active ? "bg-[#FF5A36] text-white" : "bg-slate-100 text-slate-600 " }`}>
                       {it.badge > 999 ? "1,420" : it.badge}
                     </span>
                   )}
@@ -678,23 +622,15 @@ export default function AdminPortal({
                   key={it.id}
                   onClick={() => setActiveTab(it.id)}
                   title={sidebarCollapsed ? it.label : undefined}
-                  className={`w-full flex items-center ${
-                    sidebarCollapsed ? "justify-center px-0" : "justify-between px-3"
-                  } py-2 rounded-xl text-xs font-semibold transition-all relative group ${
-                    active
-                      ? "bg-orange-50 text-[#FF5A36] font-bold shadow-2xs before:absolute before:left-0 before:top-2 before:bottom-2 before:w-1 before:bg-[#FF5A36] before:rounded-r"
-                      : "text-slate-600 hover:text-slate-900 hover:bg-slate-50"
-                  }`}
+                  className={`w-full flex items-center ${ sidebarCollapsed ? "justify-center px-0 py-2.5" : "justify-between px-3.5 py-2" } rounded-xl text-xs font-semibold transition-all relative group ${ active ? "bg-orange-50 text-[#FF5A36] font-bold shadow-2xs before:absolute before:left-0 before:top-2 before:bottom-2 before:w-1 before:bg-[#FF5A36] before:rounded-r" : "text-slate-600 hover:text-slate-900 hover:bg-slate-50 " }`}
                 >
                   <div className="flex items-center gap-3">
-                    <Icon className={`w-4 h-4 shrink-0 transition-colors ${active ? "text-[#FF5A36]" : "text-slate-400 group-hover:text-slate-700"}`} />
+                    <Icon className={`w-4 h-4 shrink-0 transition-colors ${active ? "text-[#FF5A36]" : "text-slate-400 group-hover:text-slate-700 "}`} />
                     {!sidebarCollapsed && <span>{it.label}</span>}
                   </div>
 
                   {!sidebarCollapsed && it.badge !== undefined && it.badge > 0 && (
-                    <span className={`px-2 py-0.5 text-[10px] rounded-full font-mono font-bold ${
-                      active ? "bg-[#FF5A36] text-white" : "bg-slate-100 text-slate-600"
-                    }`}>
+                    <span className={`px-2 py-0.5 text-[10px] rounded-full font-mono font-bold ${ active ? "bg-[#FF5A36] text-white" : "bg-slate-100 text-slate-600 " }`}>
                       {it.badge}
                     </span>
                   )}
@@ -705,36 +641,50 @@ export default function AdminPortal({
         </div>
 
         {/* User Profile Card & Sign Out */}
-        <div className="p-3 border-t border-slate-100 bg-slate-50/50 flex items-center justify-between gap-2">
-          <div className="flex items-center gap-2.5 overflow-hidden">
-            <Avatar size="sm" className="shrink-0 border border-slate-200">
-              {user?.imageUrl && <AvatarImage src={user.imageUrl} alt={adminDisplayName} />}
-              <AvatarFallback className="bg-orange-100 text-[#FF5A36] font-bold text-[10px]">
-                {adminDisplayName.slice(0, 2).toUpperCase()}
-              </AvatarFallback>
-            </Avatar>
+        <div className="p-3 border-t border-slate-100 bg-slate-50/70 space-y-2">
+          <div className={`flex items-center ${sidebarCollapsed ? "justify-center" : "justify-between"} gap-2`}>
+            <div className="flex items-center gap-2.5 min-w-0">
+              <Avatar className="w-10 h-10 shrink-0 ring-2 ring-orange-500/20 shadow-2xs border border-orange-200">
+                {user?.imageUrl && <AvatarImage src={user.imageUrl} alt={adminDisplayName} className="object-cover" />}
+                <AvatarFallback className="bg-orange-100 text-[#FF5A36] font-bold text-xs">
+                  {adminDisplayName.slice(0, 2).toUpperCase()}
+                </AvatarFallback>
+              </Avatar>
+              {!sidebarCollapsed && (
+                <div className="overflow-hidden min-w-0">
+                  <div className="font-bold text-xs text-slate-900 truncate">{adminDisplayName}</div>
+                  <div className="text-[10px] text-slate-400 truncate">{adminEmailDisplay}</div>
+                </div>
+              )}
+            </div>
+
             {!sidebarCollapsed && (
-              <div className="overflow-hidden">
-                <div className="font-bold text-xs text-slate-900 truncate">{adminDisplayName}</div>
-                <div className="text-[10px] text-slate-400 truncate">{adminEmailDisplay}</div>
-              </div>
+              <button
+                onClick={onLogout}
+                title="Sign Out Admin"
+                className="p-1.5 rounded-lg text-slate-400 hover:text-red-600 hover:bg-red-50 transition-colors shrink-0"
+              >
+                <LogOut className="w-4 h-4" />
+              </button>
             )}
           </div>
 
-          <button
-            onClick={onLogout}
-            title="Sign Out Admin"
-            className="p-1.5 rounded-lg text-slate-400 hover:text-red-600 hover:bg-red-50 transition-colors"
-          >
-            <LogOut className="w-4 h-4" />
-          </button>
+          {sidebarCollapsed && (
+            <button
+              onClick={onLogout}
+              title="Sign Out Admin"
+              className="w-full flex items-center justify-center p-2 rounded-xl text-slate-400 hover:text-red-600 hover:bg-red-50 transition-colors"
+            >
+              <LogOut className="w-4 h-4" />
+            </button>
+          )}
         </div>
       </aside>
 
       {/* ── Main View Workspace ─────────────────────────────────────────── */}
       <main className="flex-1 flex flex-col min-w-0 bg-[#F8F9FB]">
         {/* Top Header Bar */}
-        <header className="h-16 bg-white border-b border-slate-200/80 px-6 flex items-center justify-between sticky top-0 z-20 shadow-xs">
+        <header className="h-16 bg-white/95 backdrop-blur-md border-b border-slate-200/80 px-6 flex items-center justify-between sticky top-0 z-20 shadow-xs">
           <div className="flex items-center gap-4">
             <h2 className="font-bold text-xl text-slate-900 capitalize tracking-tight">
               {activeTab === "courses" 
@@ -752,7 +702,7 @@ export default function AdminPortal({
             </span>
           </div>
 
-          {/* Search Header Controls */}
+                    {/* Header Controls & Day/Night Toggle */}
           <div className="flex items-center gap-3">
             <div className="relative hidden md:block w-72">
               <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
@@ -761,10 +711,11 @@ export default function AdminPortal({
                 placeholder="Search students, batches, topics..."
                 value={globalSearch}
                 onChange={(e) => setGlobalSearch(e.target.value)}
-                className="w-full pl-9 pr-3 py-1.5 text-xs rounded-xl border border-slate-200 bg-slate-50/70 focus:bg-white focus:outline-none focus:border-slate-400 transition-all"
+                className="w-full pl-9 pr-3 py-1.5 text-xs rounded-xl border border-slate-200 bg-slate-50/70 text-slate-900 placeholder:text-slate-400 focus:bg-white focus:outline-none focus:border-slate-400 transition-all"
               />
             </div>
-          </div>
+
+            </div>
         </header>
 
         <div className="p-6 sm:p-8 flex-1 overflow-y-auto space-y-6">
@@ -1193,7 +1144,7 @@ export default function AdminPortal({
 
           {/* Enroll Student Modal */}
           {showEnrollModal && (
-            <div className="fixed inset-0 bg-slate-900/60 flex items-center justify-center z-50 p-4">
+            <div className="fixed inset-0 bg-slate-950/70 backdrop-blur-xs flex items-center justify-center z-50 p-4">
               <div className="bg-white rounded-2xl max-w-lg w-full p-6 space-y-4 shadow-2xl animate-in zoom-in-95">
                 <div className="flex items-center justify-between border-b border-slate-100 pb-3">
                   <h3 className="font-black text-base text-slate-900">Enroll New Student</h3>
@@ -1280,9 +1231,32 @@ export default function AdminPortal({
                     Cancel
                   </button>
                   <button
-                    onClick={() => {
-                      alert("Student enrolled successfully.");
-                      setShowEnrollModal(false);
+                    onClick={async () => {
+                      if (!enrollForm.fullName.trim() || !enrollForm.email.trim() || !enrollForm.collegeName.trim() || !enrollForm.branch.trim()) {
+                        alert("Please fill all required fields (Name, Email, College, Branch).");
+                        return;
+                      }
+                      try {
+                        const res = await runRegisterStudentMut({
+                          fullName: enrollForm.fullName.trim(),
+                          email: enrollForm.email.trim().toLowerCase(),
+                          phone: enrollForm.phone.trim() || "+91 00000 00000",
+                          collegeName: enrollForm.collegeName.trim(),
+                          branch: enrollForm.branch.trim(),
+                          currentYear: "1st Year",
+                          graduationYear: new Date().getFullYear().toString(),
+                          preferredCourse: "python-mastery",
+                          linkedinProfile: "https://www.linkedin.com/in/student",
+                        });
+                        if (enrollForm.batchId && res?.student?.id) {
+                          await runEnrollStudentMut({ studentId: res.student.id, batchId: enrollForm.batchId });
+                        }
+                        alert("Student registered and enrolled successfully.");
+                        setEnrollForm({ fullName: "", email: "", phone: "", collegeName: "", branch: "", batchId: "" });
+                        setShowEnrollModal(false);
+                      } catch (err: any) {
+                        alert(err.message || "Failed to enroll student.");
+                      }
                     }}
                     className="px-4 py-2 bg-[#FF5A36] text-white text-xs font-bold rounded-xl hover:bg-orange-600 shadow-md shadow-orange-500/20"
                   >
@@ -1295,7 +1269,7 @@ export default function AdminPortal({
 
           {/* Student Profile Modal */}
           {selectedStudent && (
-            <div className="fixed inset-0 bg-slate-900/60 flex items-center justify-center z-50 p-4">
+            <div className="fixed inset-0 bg-slate-950/70 backdrop-blur-xs flex items-center justify-center z-50 p-4">
               <div className="bg-white rounded-2xl max-w-xl w-full p-6 space-y-4 shadow-2xl overflow-y-auto max-h-[90vh] animate-in zoom-in-95">
                 <div className="flex items-center justify-between border-b border-slate-100 pb-3">
                   <div>
@@ -1456,7 +1430,7 @@ export default function AdminPortal({
 
           {/* Form Modal for Batch creation/editing */}
           {showBatchForm && (
-            <div className="fixed inset-0 bg-slate-900/60 flex items-center justify-center z-50 p-4">
+            <div className="fixed inset-0 bg-slate-950/70 backdrop-blur-xs flex items-center justify-center z-50 p-4">
               <Card className="max-w-md w-full p-6 space-y-4 shadow-2xl animate-in zoom-in-95 bg-white">
                 <div className="flex items-center justify-between border-b border-slate-100 pb-3">
                   <h3 className="font-black text-base text-slate-900">{editingBatchId ? "Edit Batch" : "Create Batch"}</h3>
@@ -1603,7 +1577,7 @@ export default function AdminPortal({
 
           {/* Grading Submission Modal */}
           {gradingSubmission && (
-            <div className="fixed inset-0 bg-slate-900/60 flex items-center justify-center z-50 p-4">
+            <div className="fixed inset-0 bg-slate-950/70 backdrop-blur-xs flex items-center justify-center z-50 p-4">
               <div className="bg-white rounded-2xl max-w-xl w-full p-6 space-y-4 shadow-2xl overflow-y-auto max-h-[90vh] animate-in zoom-in-95">
                 <div className="flex items-center justify-between border-b border-slate-100 pb-3">
                   <h3 className="font-black text-base text-slate-900">Grade Submission — {gradingSubmission.testId}</h3>
@@ -1731,9 +1705,7 @@ export default function AdminPortal({
                         </div>
 
                         <div className="flex items-center gap-3">
-                          <span className={`text-[10px] font-bold px-2.5 py-0.5 rounded-full ${
-                            modulePct === 100 ? "bg-emerald-50 text-emerald-700 border border-emerald-200" : "bg-blue-50 text-blue-700 border border-blue-200"
-                          }`}>
+                          <span className={`text-[10px] font-bold px-2.5 py-0.5 rounded-full ${ modulePct === 100 ? "bg-emerald-50 text-emerald-700 border border-emerald-200" : "bg-blue-50 text-blue-700 border border-blue-200" }`}>
                             {modulePct}% Released
                           </span>
                           <ChevronDown className={`w-4 h-4 text-slate-400 transition-transform ${isExpanded ? "rotate-180" : ""}`} />
@@ -1755,9 +1727,7 @@ export default function AdminPortal({
                                     <span className="font-mono text-[10px] font-bold text-indigo-600 bg-indigo-50 px-2 py-0.5 rounded">
                                       DAY {String(d.dayNumber).padStart(2, "0")}
                                     </span>
-                                    <span className={`text-[9px] font-bold px-2 py-0.5 rounded-full uppercase ${
-                                      isReleased ? "bg-emerald-50 text-emerald-700 border border-emerald-200" : "bg-slate-100 text-slate-600"
-                                    }`}>
+                                    <span className={`text-[9px] font-bold px-2 py-0.5 rounded-full uppercase ${ isReleased ? "bg-emerald-50 text-emerald-700 border border-emerald-200" : "bg-slate-100 text-slate-600 " }`}>
                                       {isReleased ? "RELEASED" : "UNRELEASED"}
                                     </span>
                                   </div>
@@ -1938,20 +1908,14 @@ export default function AdminPortal({
                                         <button
                                           key={t.id}
                                           onClick={() => setPreviewTopicId(t.id)}
-                                          className={`w-full p-3 flex items-start justify-between text-left transition-all group ${
-                                            isSelected
-                                              ? "bg-indigo-50/50 border-l-4 border-indigo-600 shadow-2xs"
-                                              : "hover:bg-slate-50"
-                                          }`}
+                                          className={`w-full p-3 flex items-start justify-between text-left transition-all group ${ isSelected ? "bg-indigo-50/50 border-l-4 border-indigo-600 shadow-2xs" : "hover:bg-slate-50" }`}
                                         >
                                           <div className="flex items-start gap-2.5 min-w-0">
-                                            <span className={`w-5 h-5 rounded-full font-mono font-bold text-[10px] flex items-center justify-center shrink-0 mt-0.5 ${
-                                              isSelected ? "bg-indigo-600 text-white" : "bg-slate-200 text-slate-600"
-                                            }`}>
+                                            <span className={`w-5 h-5 rounded-full font-mono font-bold text-[10px] flex items-center justify-center shrink-0 mt-0.5 ${ isSelected ? "bg-indigo-600 text-white" : "bg-slate-200 text-slate-600 " }`}>
                                               {t.order || idx + 1}
                                             </span>
                                             <div className="min-w-0">
-                                              <h4 className={`text-xs leading-snug line-clamp-2 ${isSelected ? "font-black text-indigo-900" : "font-semibold text-slate-700 group-hover:text-slate-900"}`}>
+                                              <h4 className={`text-xs leading-snug line-clamp-2 ${isSelected ? "font-black text-indigo-900" : "font-semibold text-slate-700 group-hover:text-slate-900 "}`}>
                                                 {t.title}
                                               </h4>
                                             </div>
@@ -2253,20 +2217,12 @@ export default function AdminPortal({
                       return (
                         <Card
                           key={d.id}
-                          className={`p-5 transition-all shadow-sm ${
-                            isRel
-                              ? "border-emerald-200 bg-emerald-50/10 hover:border-emerald-300"
-                              : "border-slate-200 hover:border-slate-300 bg-white"
-                          }`}
+                          className={`p-5 transition-all shadow-sm ${ isRel ? "border-emerald-200 bg-emerald-50/10 hover:border-emerald-300" : "border-slate-200 hover:border-slate-300 bg-white" }`}
                         >
                           <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 pb-3 border-b border-slate-100">
                             <div className="flex items-start gap-3.5">
                               {/* Day Pill */}
-                              <div className={`w-12 h-12 rounded-xl flex flex-col items-center justify-center shrink-0 border font-mono ${
-                                isRel
-                                  ? "bg-emerald-500 text-white border-emerald-600 shadow-sm"
-                                  : "bg-slate-100 text-slate-700 border-slate-200"
-                              }`}>
+                              <div className={`w-12 h-12 rounded-xl flex flex-col items-center justify-center shrink-0 border font-mono ${ isRel ? "bg-emerald-500 text-white border-emerald-600 shadow-sm" : "bg-slate-100 text-slate-700 border-slate-200" }`}>
                                 <span className="text-[9px] uppercase font-bold leading-tight">DAY</span>
                                 <span className="text-base font-black leading-none">{d.dayNumber < 10 ? `0${d.dayNumber}` : d.dayNumber}</span>
                               </div>
@@ -2629,13 +2585,7 @@ export default function AdminPortal({
                                   </TableCell>
 
                                   <TableCell>
-                                    <span className={`inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full ${
-                                      sub.evalStatus === "auto" 
-                                        ? "bg-emerald-50 text-emerald-700 border border-emerald-200" 
-                                        : sub.evalStatus === "manual" 
-                                        ? "bg-blue-50 text-blue-700 border border-blue-200" 
-                                        : "bg-amber-50 text-amber-700 border border-amber-200"
-                                    }`}>
+                                    <span className={`inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full ${ sub.evalStatus === "auto" ? "bg-emerald-50 text-emerald-700 border border-emerald-200" : sub.evalStatus === "manual" ? "bg-blue-50 text-blue-700 border border-blue-200" : "bg-amber-50 text-amber-700 border border-amber-200" }`}>
                                       {sub.evalStatus === "auto" ? "AI Auto" : sub.evalStatus === "manual" ? "Admin" : "Pending"}
                                     </span>
                                   </TableCell>
@@ -2711,9 +2661,7 @@ export default function AdminPortal({
                                   return (
                                     <TableCell key={d.id} className="text-center p-2">
                                       {dayScore !== null ? (
-                                        <span className={`inline-block px-1.5 py-0.5 rounded text-[10px] font-mono font-bold ${
-                                          dayScore >= 70 ? "bg-emerald-100 text-emerald-800" : "bg-rose-100 text-rose-800"
-                                        }`}>
+                                        <span className={`inline-block px-1.5 py-0.5 rounded text-[10px] font-mono font-bold ${ dayScore >= 70 ? "bg-emerald-100 text-emerald-800" : "bg-rose-100 text-rose-800" }`}>
                                           {dayScore}%
                                         </span>
                                       ) : (
@@ -3004,7 +2952,7 @@ export default function AdminPortal({
 
           {/* Announcement Modal */}
           {isAnnEditing && (
-            <div className="fixed inset-0 bg-slate-900/50 flex items-center justify-center z-50 p-4">
+            <div className="fixed inset-0 bg-slate-950/70 backdrop-blur-xs flex items-center justify-center z-50 p-4">
               <Card className="max-w-md w-full p-6 space-y-4 shadow-2xl bg-white animate-in zoom-in-95">
                 <h3 className="font-extrabold text-sm text-slate-900">Create Announcement</h3>
                 <Input
@@ -3108,21 +3056,13 @@ export default function AdminPortal({
                 {copilotMessages.map((m) => (
                   <div key={m.id} className={`flex ${m.sender === "user" ? "justify-end" : "justify-start"}`}>
                     <div className={`max-w-2xl space-y-2.5 ${m.sender === "user" ? "items-end" : "items-start"}`}>
-                      <div className={`p-3.5 rounded-2xl text-xs leading-relaxed ${
-                        m.sender === "user" 
-                          ? "bg-slate-900 text-white rounded-br-none shadow-sm" 
-                          : "bg-white border border-slate-200/80 text-slate-800 rounded-bl-none shadow-sm whitespace-pre-wrap"
-                      }`}>
+                      <div className={`p-3.5 rounded-2xl text-xs leading-relaxed ${ m.sender === "user" ? "bg-slate-900 text-white rounded-br-none shadow-sm" : "bg-white border border-slate-200/80 text-slate-800 rounded-bl-none shadow-sm whitespace-pre-wrap" }`}>
                         {m.text}
                       </div>
 
                       {/* Autonomous Action Card */}
                       {m.actionExecuted && (
-                        <div className={`p-4 rounded-xl border text-xs shadow-sm transition-all ${
-                          m.actionExecuted.status === "success" 
-                            ? "bg-emerald-50/80 border-emerald-200 text-emerald-950" 
-                            : "bg-rose-50/80 border-rose-200 text-rose-950"
-                        }`}>
+                        <div className={`p-4 rounded-xl border text-xs shadow-sm transition-all ${ m.actionExecuted.status === "success" ? "bg-emerald-50/80 border-emerald-200 text-emerald-950" : "bg-rose-50/80 border-rose-200 text-rose-950" }`}>
                           <div className="flex items-center justify-between mb-2">
                             <div className="flex items-center gap-1.5 font-bold">
                               {m.actionExecuted.status === "success" ? (

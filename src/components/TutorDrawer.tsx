@@ -52,7 +52,7 @@ export default function TutorDrawer({
         <div className="p-4 border-b border-slate-200 bg-slate-50 flex items-center justify-between">
           <div className="flex items-center gap-2.5">
             <img
-              src="/KRIORA_LOGO.png"
+              src="/KRIORA_LOGO_2.png"
               alt="Kriora AI"
               className="w-8 h-8 rounded-full object-cover shadow-md shadow-orange-500/20 border border-orange-200 ring-2 ring-orange-500/20"
             />

@@ -81,18 +81,12 @@ json.dumps({"stdout": std_out_val, "stderr": std_err_val, "error": exec_err})
       stderr: result.stderr || "",
       error: result.error || null,
     };
-  } catch {
-    // Fallback to the server-side sandbox endpoint.
-    const res = await fetch("/api/compiler/execute", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ code, stdin }),
-    });
-    const data = await res.json();
-    if (data.success) {
-      return { stdout: data.output || "", stderr: "", error: null };
-    }
-    return { stdout: data.output || "", stderr: "", error: data.error || "Execution failed." };
+  } catch (err: any) {
+    return {
+      stdout: "",
+      stderr: err?.message || "Python execution failed in Pyodide WASM environment.",
+      error: err?.message || "Execution error",
+    };
   }
 }
 

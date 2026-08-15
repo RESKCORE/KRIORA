@@ -8,7 +8,7 @@ const ADMIN_EMAILS = (
   process.env.ADMIN_EMAIL ||
   process.env.VITE_ADMIN_EMAILS ||
   process.env.VITE_ADMIN_EMAIL ||
-  "reddysantosh1310@gmail.com,suchandramanne@gmail.com"
+  ""
 )
   .split(",")
   .map((e) => e.trim().toLowerCase())
@@ -170,6 +170,28 @@ export const registerStudent = mutation({
   },
   handler: async (ctx, args) => {
     const cleanEmail = args.email.trim().toLowerCase();
+    const fullName = args.fullName.trim();
+    const collegeName = args.collegeName.trim();
+    const branch = args.branch.trim();
+    const preferredCourse = args.preferredCourse.trim();
+    const linkedinProfile = (args.linkedinProfile || "").trim();
+    const githubProfile = (args.githubProfile || "").trim();
+
+    if (!fullName) throw new Error("Full name is required");
+    if (!cleanEmail || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(cleanEmail)) {
+      throw new Error("A valid email address is required");
+    }
+    if (!collegeName) throw new Error("College name is required");
+    if (!branch) throw new Error("Branch / department is required");
+    if (!preferredCourse) throw new Error("Course selection is required");
+    if (!linkedinProfile) throw new Error("LinkedIn profile URL is required");
+    if (!/^https?:\/\/(www\.)?linkedin\.com\/.*$/i.test(linkedinProfile)) {
+      throw new Error("Please enter a valid LinkedIn profile URL (e.g. https://www.linkedin.com/in/username)");
+    }
+    if (githubProfile && !/^https?:\/\/(www\.)?github\.com\/.*$/i.test(githubProfile)) {
+      throw new Error("Please enter a valid GitHub profile URL (e.g. https://github.com/username)");
+    }
+
     const existing = await ctx.db
       .query("students")
       .withIndex("by_email", (q) => q.eq("email", cleanEmail))
@@ -193,25 +215,25 @@ export const registerStudent = mutation({
       id: studentId,
       email: cleanEmail,
       clerkUserId,
-      fullName: args.fullName,
-      phone: args.phone,
-      collegeName: args.collegeName,
-      university: args.university || "",
-      degree: args.degree || "",
-      branch: args.branch,
+      fullName: fullName,
+      phone: args.phone.trim(),
+      collegeName: collegeName,
+      university: (args.university || "").trim(),
+      degree: (args.degree || "").trim(),
+      branch: branch,
       currentYear: args.currentYear,
       graduationYear: args.graduationYear,
-      city: args.city || "",
-      state: args.state || "",
-      linkedinProfile: args.linkedinProfile || "",
-      githubProfile: args.githubProfile || "",
-      skills: args.skills || "",
-      preferredCourse: args.preferredCourse || "python-mastery",
-      reasonForJoining: args.reasonForJoining || "",
-      resumeUrl: args.resumeUrl || "",
+      city: (args.city || "").trim(),
+      state: (args.state || "").trim(),
+      linkedinProfile: linkedinProfile,
+      githubProfile: githubProfile,
+      skills: (args.skills || "").trim(),
+      preferredCourse: preferredCourse,
+      reasonForJoining: (args.reasonForJoining || "").trim(),
+      resumeUrl: (args.resumeUrl || "").trim(),
       status: "Pending",
       role: "student",
-      progress: { "python-mastery": 0 },
+      progress: { [preferredCourse]: 0 },
       completedLessons: [],
       registeredAt,
     };
@@ -1157,126 +1179,3 @@ export const lockDayForBatch = mutation({
   },
 });
 
-export const setDayReleaseStatus = mutation({
-  args: {
-    actorEmail: v.optional(v.string()),
-    dayId: v.string(),
-    releaseStatus: v.string(),
-  },
-  handler: async (ctx, args) => {
-    await requireAdmin(ctx, args.actorEmail);
-
-    const days = await ctx.db
-      .query("courseDays")
-      .withIndex("by_course", (q) => q.eq("courseId", "python-mastery"))
-      .collect();
-    const day = days.find((d) => d.id === args.dayId);
-    if (!day) throw new Error("Day not found");
-
-    const ts = new Date().toISOString();
-    await ctx.db.patch(day._id, {
-      releaseStatus: args.releaseStatus,
-      releasedAt: args.releaseStatus !== "locked" ? ts : undefined,
-      lockedAt: args.releaseStatus === "locked" ? ts : undefined,
-    });
-
-    await ctx.db.insert("auditLogs", {
-      id: "log-" + Date.now(),
-      timestamp: ts,
-      userId: "admin-core",
-      userName: "Director Admin",
-      userEmail: getAuditEmail(args.actorEmail),
-      role: "Admin",
-      action: `Day ${args.releaseStatus === "locked" ? "Locked" : "Released"}`,
-      details: `${args.dayId} set to ${args.releaseStatus}`,
-    });
-
-    return { success: true };
-  },
-});
-
-export const addDay = mutation({
-  args: {
-    actorEmail: v.optional(v.string()),
-    courseId: v.string(),
-    moduleId: v.string(),
-    dayNumber: v.number(),
-    title: v.string(),
-    description: v.optional(v.string()),
-    assessmentKey: v.optional(v.string()),
-  },
-  handler: async (ctx, args) => {
-    await requireAdmin(ctx, args.actorEmail);
-
-    const existing = await ctx.db
-      .query("courseDays")
-      .withIndex("by_day_number", (q) =>
-        q.eq("courseId", args.courseId).eq("dayNumber", args.dayNumber)
-      )
-      .first();
-    if (existing) throw new Error(`Day ${args.dayNumber} already exists`);
-
-    const dayId = "day-" + args.dayNumber;
-    await ctx.db.insert("courseDays", {
-      id: dayId,
-      moduleId: args.moduleId,
-      courseId: args.courseId,
-      dayNumber: args.dayNumber,
-      title: args.title,
-      description: args.description || "",
-      releaseStatus: "locked",
-      assessmentKey: args.assessmentKey,
-      topics: [],
-    });
-
-    await ctx.db.insert("auditLogs", {
-      id: "log-" + Date.now(),
-      timestamp: new Date().toISOString(),
-      userId: "admin-core",
-      userName: "Director Admin",
-      userEmail: getAuditEmail(args.actorEmail),
-      role: "Admin",
-      action: "Day Added",
-      details: `Created Day ${args.dayNumber} "${args.title}" in module ${args.moduleId}`,
-    });
-
-    return { success: true, dayId };
-  },
-});
-
-export const saveTopic = mutation({
-  args: {
-    actorEmail: v.optional(v.string()),
-    courseId: v.string(),
-    dayId: v.string(),
-    topic: v.any(),
-  },
-  handler: async (ctx, args) => {
-    await requireAdmin(ctx, args.actorEmail);
-
-    const days = await ctx.db
-      .query("courseDays")
-      .withIndex("by_course", (q) => q.eq("courseId", args.courseId))
-      .collect();
-    const day = days.find((d) => d.id === args.dayId);
-    if (!day) throw new Error("Day not found");
-
-    const topics = (day.topics || []).map((t: any) =>
-      t.id === args.topic.id ? { ...t, ...args.topic, version: (t.version || 1) + 1 } : t
-    );
-    await ctx.db.patch(day._id, { topics });
-
-    await ctx.db.insert("auditLogs", {
-      id: "log-" + Date.now(),
-      timestamp: new Date().toISOString(),
-      userId: "admin-core",
-      userName: "Director Admin",
-      userEmail: getAuditEmail(args.actorEmail),
-      role: "Admin",
-      action: "Topic Saved",
-      details: `Updated topic "${args.topic.title || args.topic.id}" on ${args.dayId}`,
-    });
-
-    return { success: true };
-  },
-});

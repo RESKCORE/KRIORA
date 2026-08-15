@@ -16,6 +16,15 @@ if (!CONVEX_URL) {
 
 const convex = new ConvexReactClient(CONVEX_URL);
 
+if (typeof document !== 'undefined') {
+  document.documentElement.classList.remove('dark');
+  document.documentElement.classList.add('light');
+  document.documentElement.setAttribute('data-theme', 'light');
+  try {
+    localStorage.removeItem('kriora_theme');
+  } catch (_) {}
+}
+
 const RootApp = () => {
   if (!PUBLISHABLE_KEY) {
     return <App />;

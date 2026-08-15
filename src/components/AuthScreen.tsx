@@ -15,7 +15,7 @@ export default function AuthScreen() {
         {/* Brand */}
         <div className="flex flex-col items-center justify-center gap-3.5 mb-2">
           <img
-            src="/KRIORA_LOGO.png"
+            src="/KRIORA_LOGO_2.png"
             alt="Kriora Logo"
             className="w-16 h-16 rounded-full object-cover shadow-xl shadow-orange-500/20 border-2 border-white ring-2 ring-[#FF5A36]/30"
           />

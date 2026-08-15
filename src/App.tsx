@@ -22,7 +22,7 @@ interface ChatMessage {
 const ADMIN_EMAILS = (
   import.meta.env.VITE_ADMIN_EMAILS ||
   import.meta.env.VITE_ADMIN_EMAIL ||
-  'reddysantosh1310@gmail.com,suchandramanne@gmail.com'
+  ''
 )
   .split(',')
   .map((e: string) => e.trim().toLowerCase())
@@ -167,7 +167,7 @@ Your RESTRICTIONS:
       <div className="min-h-screen bg-white flex flex-col items-center justify-center font-mono text-xs text-slate-500 gap-4">
         <div className="relative flex items-center justify-center">
           <img
-            src="/KRIORA_LOGO.png"
+            src="/KRIORA_LOGO_2.png"
             alt="Kriora Logo"
             className="w-16 h-16 rounded-full object-cover shadow-lg border-2 border-orange-100 ring-4 ring-orange-500/10"
           />
@@ -230,7 +230,7 @@ Your RESTRICTIONS:
           <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-slate-200 pb-5">
             <div className="flex items-center gap-3.5">
               <img
-                src="/KRIORA_LOGO.png"
+                src="/KRIORA_LOGO_2.png"
                 alt="Kriora Logo"
                 className="w-12 h-12 rounded-full object-cover shrink-0 border border-orange-200 shadow-md ring-2 ring-orange-500/20"
               />
