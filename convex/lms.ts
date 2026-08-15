@@ -1,4 +1,5 @@
 import { query, mutation, action } from "./_generated/server";
+import { api } from "./_generated/api";
 import { v } from "convex/values";
 import type { QueryCtx, MutationCtx, ActionCtx } from "./_generated/server";
 
@@ -1282,16 +1283,87 @@ export const adminCopilotChat = action({
       )
     ),
   },
-  handler: async (_ctx, args) => {
-    const system = `You are the Kriora LMS Admin Copilot with autonomous platform execution capabilities.
-Help the administrator draft announcements, summarize batch performance, explain platform metrics, and plan curriculum topics.
-Provide polished, professional copy ready to publish. Refer to the platform as Kriora LMS.`;
+  handler: async (ctx, args) => {
+    let livePlatformSummary = "";
+    try {
+      const adminData: any = await ctx.runQuery(api.lms.getAdminDashboardData, {
+        actorEmail: args.actorEmail,
+      });
+
+      if (adminData) {
+        const students = adminData.students || [];
+        const pendingStudents = students.filter(
+          (s: any) => (s.status || "").toLowerCase() === "pending"
+        );
+        const approvedStudents = students.filter(
+          (s: any) => (s.status || "").toLowerCase() === "approved"
+        );
+        const batches = adminData.batches || [];
+        const submissions = adminData.testSubmissions || [];
+        const announcements = adminData.announcements || [];
+        const config = adminData.config || {};
+
+        const avgScore =
+          submissions.length > 0
+            ? Math.round(
+                (submissions.reduce((acc: number, s: any) => acc + (s.score || 0), 0) /
+                  submissions.length) *
+                  10
+              ) / 10
+            : "N/A";
+
+        livePlatformSummary = `
+REAL-TIME LIVE KRIORA LMS PLATFORM DATA (Current Live Timestamp: ${new Date().toUTCString()}):
+- Platform / Institute: ${config.instituteName || "Kriora LMS Portal"}
+- Total Registered Students: ${students.length}
+- Approved Active Students: ${approvedStudents.length}
+- Pending Student Registrations (Awaiting Admin Approval): ${pendingStudents.length}${
+          pendingStudents.length > 0
+            ? ` [${pendingStudents
+                .map((s: any) => `${s.fullName} (${s.email}, Course: ${s.preferredCourse || "Python"})`)
+                .join(", ")}]`
+            : " (None currently pending)"
+        }
+- Total LMS Batches: ${batches.length}${
+          batches.length > 0
+            ? ` [${batches
+                .map(
+                  (b: any) =>
+                    `"${b.name}" (Status: ${b.status}, Enrolled: ${
+                      students.filter((s: any) => s.batchId === b.id).length
+                    }/${b.capacity || 50}, Schedule: ${b.startTime || "N/A"}-${b.endTime || "N/A"})`
+                )
+                .join("; ")}]`
+            : " (No batches created yet)"
+        }
+- Published Announcements (${announcements.length}): ${
+          announcements.length > 0
+            ? announcements.slice(0, 5).map((a: any) => `"${a.title}"`).join(", ")
+            : "None"
+        }
+- Student Test Submissions: ${submissions.length} total assessments submitted (Average Score: ${avgScore}/10)
+- Configured Passing Threshold: ${config.dailyPerfThreshold || 70}% (Daily Tasks), ${config.finalExamThreshold || 80}% (Final Exam)
+`;
+      }
+    } catch (dbErr) {
+      console.warn("[Admin Copilot] Could not query live admin data:", dbErr);
+    }
+
+    const system = `You are the Kriora LMS Admin Copilot with direct, real-time access to the live Convex Cloud database.
+
+${livePlatformSummary || "Live data unavailable."}
+
+CRITICAL RULES:
+1. When asked about metrics, pending registrations, batches, students, or platform stats, ALWAYS use the EXACT REAL DATA listed above. Never invent, approximate, or hallucinate fake numbers, placeholder batches, or outdated dates (e.g. 2023).
+2. If asked to draft an announcement, write high quality, professional markdown copy ready to broadcast to students.
+3. If the user asks to post an announcement, provide the finalized draft and confirm it is ready to be published to all students on Kriora LMS.
+4. Keep answers concise, executive, clean, and highly structured with bullet points.`;
 
     const allMsgs = [...(args.history || []), { role: "user", content: args.message }];
     const text = await generateConvexAI({
       system,
       messages: allMsgs,
-      temperature: 0.7,
+      temperature: 0.5,
     });
 
     return { success: true, text, reply: text };
