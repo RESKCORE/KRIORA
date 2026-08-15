@@ -64,11 +64,9 @@ export default function OnboardingScreen({ actorEmail, clerkEmail, clerkName, on
     if (!form.experience.trim()) errs.experience = 'Experience level is required';
     if (!form.learningGoals.trim()) errs.learningGoals = 'Learning goals are required';
 
-    // LinkedIn Validation (REQUIRED)
+    // LinkedIn Validation (OPTIONAL - only validate format if entered)
     const linkedin = form.linkedinProfile.trim();
-    if (!linkedin) {
-      errs.linkedinProfile = 'LinkedIn profile URL is required';
-    } else if (!/^https?:\/\/(www\.)?linkedin\.com\/.*$/i.test(linkedin)) {
+    if (linkedin && !/^https?:\/\/(www\.)?linkedin\.com\/.*$/i.test(linkedin)) {
       errs.linkedinProfile = 'Please enter a valid LinkedIn URL (e.g. https://www.linkedin.com/in/username)';
     }
 
@@ -261,11 +259,11 @@ export default function OnboardingScreen({ actorEmail, clerkEmail, clerkName, on
               {fieldErrors.phone && <p className="text-[10px] text-red-500 font-medium">{fieldErrors.phone}</p>}
             </div>
 
-            {/* LinkedIn Profile (REQUIRED) */}
+            {/* LinkedIn Profile (OPTIONAL) */}
             <div className="space-y-1.5">
               <label className="text-[10px] font-extrabold text-slate-700 uppercase tracking-wider flex items-center justify-between">
-                <span>LinkedIn Profile URL <span className="text-red-500 font-bold">*</span></span>
-                <span className="text-[9px] text-[#FF5A36] font-mono font-bold uppercase">Required</span>
+                <span>LinkedIn Profile URL</span>
+                <span className="text-[9px] text-slate-400 font-mono uppercase">Optional</span>
               </label>
               <div className="relative">
                 <Link2 className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
@@ -275,7 +273,6 @@ export default function OnboardingScreen({ actorEmail, clerkEmail, clerkName, on
                   onChange={(e) => updateField('linkedinProfile', e.target.value)}
                   placeholder="https://www.linkedin.com/in/yourprofile"
                   className={`w-full bg-slate-50 border ${fieldErrors.linkedinProfile ? 'border-red-400 ring-1 ring-red-400' : 'border-slate-200'} rounded-xl pl-10 pr-4 py-2.5 text-xs text-slate-800 focus:ring-2 focus:ring-[#FF5A36] focus:border-transparent`}
-                  required
                 />
               </div>
               {fieldErrors.linkedinProfile && <p className="text-[10px] text-red-500 font-medium">{fieldErrors.linkedinProfile}</p>}

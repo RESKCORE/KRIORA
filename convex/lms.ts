@@ -194,8 +194,7 @@ export const registerStudent = mutation({
     if (!collegeName) throw new Error("College name is required");
     if (!branch) throw new Error("Branch / department is required");
     if (!preferredCourse) throw new Error("Course selection is required");
-    if (!linkedinProfile) throw new Error("LinkedIn profile URL is required");
-    if (!/^https?:\/\/(www\.)?linkedin\.com\/.*$/i.test(linkedinProfile)) {
+    if (linkedinProfile && !/^https?:\/\/(www\.)?linkedin\.com\/.*$/i.test(linkedinProfile)) {
       throw new Error("Please enter a valid LinkedIn profile URL (e.g. https://www.linkedin.com/in/username)");
     }
     if (githubProfile && !/^https?:\/\/(www\.)?github\.com\/.*$/i.test(githubProfile)) {
