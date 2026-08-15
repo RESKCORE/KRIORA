@@ -127,40 +127,94 @@ Your RESTRICTIONS:
 1. Do NOT solve active graded case study assessments directly. Provide conceptual hints and syntax explanations instead.
 2. Do NOT assist with administrative tasks, user approvals, or course management.`;
 
-      const response = await fetch('/api/chat', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          message: userText,
-          systemInstruction: systemPrompt,
-          history: chatMessages.slice(-6).map(m => ({
-            role: m.sender === 'user' ? 'user' : 'assistant',
-            content: m.text,
-          }))
-        })
-      });
+      let tutorReply = "";
 
-      if (response.ok) {
-        const data = await response.json();
-        setChatMessages(prev => [
-          ...prev,
-          {
-            id: 'ai-' + Date.now(),
-            sender: 'ai',
-            text: data.text || "I was unable to synthesize a response. Let's try again.",
-            timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-          }
-        ]);
-      } else {
-        throw new Error();
+      // 1. Try Backend Gateway API
+      try {
+        const response = await fetch('/api/chat', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            message: userText,
+            systemInstruction: systemPrompt,
+            history: chatMessages.slice(-6).map(m => ({
+              role: m.sender === 'user' ? 'user' : 'assistant',
+              content: m.text,
+            }))
+          })
+        });
+
+        if (response.ok) {
+          const data = await response.json();
+          if (data.text) tutorReply = data.text;
+        }
+      } catch (backendErr) {
+        console.warn("[Student Tutor] Backend unreachable, using direct AI fallback:", backendErr);
       }
-    } catch (err) {
+
+      // 2. Direct Fallback: Client-side Gemini Call
+      if (!tutorReply) {
+        const geminiKey = (import.meta as any).env?.VITE_GEMINI_API_KEY;
+        if (!geminiKey) {
+          throw new Error("AI tutor temporarily unavailable. Please ensure backend server is running.");
+        }
+        const contents = [
+          ...chatMessages.slice(-6).map((m) => ({
+            role: m.sender === 'user' ? 'user' : 'model',
+            parts: [{ text: m.text }],
+          })),
+          { role: 'user', parts: [{ text: userText }] },
+        ];
+
+        const models = ["gemini-2.5-flash", "gemini-2.5-flash-lite", "gemini-3.7-flash"];
+        for (const model of models) {
+          try {
+            const geminiRes = await fetch(
+              `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${geminiKey}`,
+              {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  contents,
+                  systemInstruction: { parts: [{ text: systemPrompt }] },
+                  generationConfig: { temperature: 0.7 },
+                }),
+              }
+            );
+            if (geminiRes.ok) {
+              const data = await geminiRes.json();
+              const text = data?.candidates?.[0]?.content?.parts?.[0]?.text;
+              if (text) {
+                tutorReply = text;
+                break;
+              }
+            }
+          } catch (e) {
+            console.warn(`[Student Tutor] Direct fallback with ${model} failed:`, e);
+          }
+        }
+      }
+
+      if (!tutorReply) {
+        throw new Error("Unable to reach AI tutor. Please check your network connection.");
+      }
+
+      setChatMessages(prev => [
+        ...prev,
+        {
+          id: 'ai-' + Date.now(),
+          sender: 'ai',
+          text: tutorReply,
+          timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+        }
+      ]);
+    } catch (err: any) {
       setChatMessages(prev => [
         ...prev,
         {
           id: 'ai-err-' + Date.now(),
           sender: 'ai',
-          text: "AI Study Companion is temporarily unavailable. Your code and lesson notes are fully functional.",
+          text: err.message || "AI Study Companion is temporarily unavailable. Your code and lesson notes are fully functional.",
           timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
         }
       ]);

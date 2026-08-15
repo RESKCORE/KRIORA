@@ -477,28 +477,92 @@ export default function AdminPortal({
     setCopilotTyping(true);
 
     try {
-      const res = await fetch("/api/admin/chat", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          message: promptText,
-          actorEmail,
-          history: copilotMessages.slice(-6).map((m) => ({
-            role: m.sender === "user" ? "user" : "assistant",
-            content: m.text,
-          })),
-        }),
-      });
+      let replyText = "";
 
-      const data = await res.json();
-      if (!res.ok || (!data.text && !data.reply && !data.success)) {
-        throw new Error(data.error || "Copilot could not process request");
+      // 1. Primary: Try Backend Gateway API (/api/admin/chat)
+      try {
+        const res = await fetch("/api/admin/chat", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            message: promptText,
+            actorEmail,
+            history: copilotMessages.slice(-6).map((m) => ({
+              role: m.sender === "user" ? "user" : "assistant",
+              content: m.text,
+            })),
+          }),
+        });
+
+        if (res.ok) {
+          const data = await res.json();
+          if (data.reply || data.text) {
+            replyText = data.reply || data.text;
+          }
+        }
+      } catch (backendErr) {
+        console.warn("[Admin Copilot] Backend endpoint unreachable, switching to direct AI fallback:", backendErr);
+      }
+
+      // 2. Direct Fallback: Client-side Gemini Generation
+      if (!replyText) {
+        const geminiKey = (import.meta as any).env?.VITE_GEMINI_API_KEY;
+        if (!geminiKey) {
+          throw new Error("Admin Copilot temporarily unavailable. Please verify backend server is running.");
+        }
+        const systemInstruction = `You are the Kriora LMS Admin Assistant.
+Help the administrator draft announcements, summarize student performance, and plan curriculum topics.
+Provide polished, professional copy ready to publish. Refer to the platform as Kriora LMS.`;
+
+        const contents = [
+          ...copilotMessages.slice(-6).map((m) => ({
+            role: m.sender === "user" ? "user" : "model",
+            parts: [{ text: m.text }],
+          })),
+          {
+            role: "user",
+            parts: [{ text: promptText }],
+          },
+        ];
+
+        const models = ["gemini-2.5-flash", "gemini-2.5-flash-lite", "gemini-3.7-flash"];
+        for (const model of models) {
+          try {
+            const geminiRes = await fetch(
+              `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${geminiKey}`,
+              {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                  contents,
+                  systemInstruction: { parts: [{ text: systemInstruction }] },
+                  generationConfig: { temperature: 0.7 },
+                }),
+              }
+            );
+
+            if (geminiRes.ok) {
+              const geminiData = await geminiRes.json();
+              const text = geminiData?.candidates?.[0]?.content?.parts?.[0]?.text;
+              if (text) {
+                replyText = text;
+                break;
+              }
+            }
+          } catch (e) {
+            console.warn(`[Admin Copilot] Direct fallback with ${model} failed:`, e);
+          }
+        }
+      }
+
+      if (!replyText) {
+        throw new Error("Unable to synthesize response. Please verify AI API configuration.");
       }
 
       const aiMsg: CopilotMsg = {
         id: "ai-" + Date.now(),
         sender: "ai",
-        text: data.reply || data.text || data.message || "Here is your response.",
+        text: replyText,
       };
       setCopilotMessages((prev) => [...prev, aiMsg]);
     } catch (err: any) {
@@ -507,7 +571,7 @@ export default function AdminPortal({
         {
           id: "err-" + Date.now(),
           sender: "ai",
-          text: "AI Copilot is temporarily unavailable. All admin functions remain fully operational.",
+          text: err.message || "AI Copilot is temporarily unavailable. All admin functions remain fully operational.",
         },
       ]);
     }
