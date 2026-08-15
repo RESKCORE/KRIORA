@@ -19,14 +19,24 @@ interface ChatMessage {
   timestamp: string;
 }
 
-const ADMIN_EMAILS = (
-  import.meta.env.VITE_ADMIN_EMAILS ||
-  import.meta.env.VITE_ADMIN_EMAIL ||
-  ''
-)
-  .split(',')
-  .map((e: string) => e.trim().toLowerCase())
-  .filter(Boolean);
+const DEFAULT_ADMIN_EMAILS = [
+  'reddysantosh1310@gmail.com',
+  'suchandramanne@gmail.com',
+];
+
+const ADMIN_EMAILS = Array.from(
+  new Set([
+    ...DEFAULT_ADMIN_EMAILS,
+    ...(
+      import.meta.env.VITE_ADMIN_EMAILS ||
+      import.meta.env.VITE_ADMIN_EMAIL ||
+      ''
+    )
+      .split(',')
+      .map((e: string) => e.trim().toLowerCase())
+      .filter(Boolean),
+  ])
+);
 
 export default function App() {
   const { isLoaded: isAuthLoaded, isSignedIn, signOut } = useAuth();

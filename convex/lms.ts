@@ -3,16 +3,26 @@ import { v } from "convex/values";
 import type { QueryCtx, MutationCtx } from "./_generated/server";
 
 // ─── ADMIN CONFIGURATION ──────────────────────────────────────────────────
-const ADMIN_EMAILS = (
-  process.env.ADMIN_EMAILS ||
-  process.env.ADMIN_EMAIL ||
-  process.env.VITE_ADMIN_EMAILS ||
-  process.env.VITE_ADMIN_EMAIL ||
-  ""
-)
-  .split(",")
-  .map((e) => e.trim().toLowerCase())
-  .filter(Boolean);
+const DEFAULT_ADMIN_EMAILS = [
+  "reddysantosh1310@gmail.com",
+  "suchandramanne@gmail.com",
+];
+
+const ADMIN_EMAILS = Array.from(
+  new Set([
+    ...DEFAULT_ADMIN_EMAILS,
+    ...(
+      process.env.ADMIN_EMAILS ||
+      process.env.ADMIN_EMAIL ||
+      process.env.VITE_ADMIN_EMAILS ||
+      process.env.VITE_ADMIN_EMAIL ||
+      ""
+    )
+      .split(",")
+      .map((e) => e.trim().toLowerCase())
+      .filter(Boolean),
+  ])
+);
 
 export const isAdminEmail = (email?: string): boolean => {
   if (!email) return false;
