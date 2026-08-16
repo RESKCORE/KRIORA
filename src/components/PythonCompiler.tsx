@@ -119,7 +119,8 @@ export default function PythonCompiler({ starterCode = "", topicId, studentId }:
           <button
             onClick={handleCopyCode}
             title="Copy Code"
-            className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition-colors"
+            aria-label="Copy Code to Clipboard"
+            className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500"
           >
             {copied ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
           </button>
@@ -127,7 +128,8 @@ export default function PythonCompiler({ starterCode = "", topicId, studentId }:
           <button
             onClick={handleReset}
             title="Reset code to default"
-            className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition-colors"
+            aria-label="Reset Code to Starter Template"
+            className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500"
           >
             <RotateCcw className="w-3.5 h-3.5" />
           </button>
@@ -135,7 +137,8 @@ export default function PythonCompiler({ starterCode = "", topicId, studentId }:
           <button
             onClick={handleRun}
             disabled={status === "running" || !code.trim()}
-            className="flex items-center gap-1.5 px-4 py-1.5 bg-gradient-to-r from-emerald-500 to-teal-500 hover:from-emerald-600 hover:to-teal-600 disabled:opacity-50 text-slate-950 text-xs font-black rounded-xl transition-all shadow-md shadow-emerald-500/20 active:scale-95"
+            aria-label="Run Python Code in WASM Sandbox"
+            className="flex items-center gap-1.5 px-4 py-1.5 bg-gradient-to-r from-emerald-500 to-teal-500 hover:from-emerald-600 hover:to-teal-600 disabled:opacity-50 text-slate-950 text-xs font-black rounded-xl transition-all shadow-md shadow-emerald-500/20 active:scale-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-400 cursor-pointer"
           >
             {status === "running" ? (
               <>

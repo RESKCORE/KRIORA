@@ -48,11 +48,22 @@ function normalizeEmail(email?: string) {
   return email?.trim().toLowerCase() || undefined;
 }
 
-export async function resolveAuthenticatedStudent(ctx: QueryCtx | MutationCtx, fallbackEmail?: string) {
+export function isServerAuthorized(serverSecret?: string) {
+  return !!(
+    serverSecret &&
+    process.env.CONVEX_SERVER_SECRET &&
+    serverSecret === process.env.CONVEX_SERVER_SECRET
+  );
+}
+
+export async function resolveAuthenticatedStudent(ctx: QueryCtx | MutationCtx, fallbackEmail?: string, serverSecret?: string) {
   const identity = await ctx.auth.getUserIdentity();
   const email = normalizeEmail(identity?.email || fallbackEmail);
   if (!identity && !email) {
     throw new Error("Unauthenticated: Clerk session required");
+  }
+  if (!identity && !isServerAuthorized(serverSecret)) {
+    throw new Error("Unauthenticated: Clerk session or CONVEX_SERVER_SECRET required");
   }
 
   if (identity?.subject) {
@@ -74,10 +85,11 @@ export async function resolveAuthenticatedStudent(ctx: QueryCtx | MutationCtx, f
   throw new Error(`Student identity not found for ${email || identity?.subject}`);
 }
 
-export async function findStudentByIdentity(ctx: QueryCtx, fallbackEmail?: string) {
+export async function findStudentByIdentity(ctx: QueryCtx, fallbackEmail?: string, serverSecret?: string) {
   const identity = await ctx.auth.getUserIdentity();
   const email = normalizeEmail(identity?.email || fallbackEmail);
   if (!identity && !email) return null;
+  if (!identity && !isServerAuthorized(serverSecret)) return null;
 
   if (identity?.subject) {
     const student = await ctx.db
@@ -98,10 +110,11 @@ export async function findStudentByIdentity(ctx: QueryCtx, fallbackEmail?: strin
   return null;
 }
 
-export async function bindClerkIdentityToStudent(ctx: MutationCtx, fallbackEmail?: string) {
+export async function bindClerkIdentityToStudent(ctx: MutationCtx, fallbackEmail?: string, serverSecret?: string) {
   const identity = await ctx.auth.getUserIdentity();
   const email = normalizeEmail(identity?.email || fallbackEmail);
   if ((!identity || !identity.subject) && !email) return null;
+  if (!identity && !isServerAuthorized(serverSecret)) return null;
 
   const matches = await ctx.db
     .query("students")
@@ -119,16 +132,27 @@ export async function bindClerkIdentityToStudent(ctx: MutationCtx, fallbackEmail
   return null;
 }
 
-export async function requireAdmin(ctx: QueryCtx | MutationCtx, fallbackEmail?: string) {
+export async function requireAdmin(ctx: QueryCtx | MutationCtx, fallbackEmail?: string, serverSecret?: string) {
   const identity = await ctx.auth.getUserIdentity();
   const email = normalizeEmail(identity?.email || fallbackEmail);
-  if (!identity && !email) {
+  
+  if (!identity && !fallbackEmail) {
     throw new Error("Unauthenticated: Clerk admin session required");
   }
-  if (!isAdminEmail(email)) {
-    throw new Error("Forbidden: Access restricted to LMS Administrators");
+  if (!identity && !isServerAuthorized(serverSecret)) {
+    throw new Error("Unauthenticated: Clerk admin session or CONVEX_SERVER_SECRET required");
   }
-  return identity || ({ email: email || ADMIN_EMAILS[0] } as any);
+
+  // If a session identity is present, ensure caller cannot spoof a different admin email
+  if (identity?.email && fallbackEmail && normalizeEmail(identity.email) !== normalizeEmail(fallbackEmail)) {
+    throw new Error("Forbidden: Session identity does not match supplied email argument");
+  }
+
+  if (!email || !isAdminEmail(email)) {
+    throw new Error(`Forbidden: Access restricted to LMS Administrators (${email || 'unknown'})`);
+  }
+
+  return identity || ({ email, subject: `admin_${email}` } as any);
 }
 
 async function assertDayAccessible(
@@ -276,9 +300,9 @@ export const registerStudent = mutation({
 // ─── STUDENT QUERIES & MUTATIONS ───────────────────────────────────────────
 
 export const getMyStudentContext = query({
-  args: { actorEmail: v.optional(v.string()) },
+  args: { actorEmail: v.optional(v.string()), serverSecret: v.optional(v.string()) },
   handler: async (ctx, args) => {
-    const student = await findStudentByIdentity(ctx, args.actorEmail);
+    const student = await findStudentByIdentity(ctx, args.actorEmail, args.serverSecret);
     const announcements = await ctx.db.query("announcements").collect();
     const configDoc = await ctx.db.query("config").first();
     const batches = await ctx.db.query("batches").collect();
@@ -378,9 +402,10 @@ export const updateLessonProgress = mutation({
 // ─── COURSE & DECOMPOSED CURRICULUM QUERIES ────────────────────────────────
 
 export const getCourseMetadata = query({
-  args: { courseId: v.optional(v.string()), actorEmail: v.optional(v.string()) },
+  args: { courseId: v.optional(v.string()), actorEmail: v.optional(v.string()), serverSecret: v.optional(v.string()) },
   handler: async (ctx, args) => {
     const targetId = args.courseId || "python-mastery";
+    const serverAuthed = isServerAuthorized(args.serverSecret);
 
     const course = await ctx.db
       .query("courses")
@@ -402,12 +427,12 @@ export const getCourseMetadata = query({
       days.sort((a, b) => a.dayNumber - b.dayNumber);
 
       const identity = await ctx.auth.getUserIdentity();
-      const isAdmin = isAdminEmail(identity?.email || args.actorEmail);
+      const isAdmin = isAdminEmail(identity?.email) || (serverAuthed && isAdminEmail(args.actorEmail));
 
       let visibleDays = days;
       if (!isAdmin) {
         let student: any = null;
-        try { student = await resolveAuthenticatedStudent(ctx, args.actorEmail); } catch {}
+        try { student = await resolveAuthenticatedStudent(ctx, args.actorEmail, args.serverSecret); } catch {}
         const grants = student?.batchId
           ? await ctx.db
               .query("dayAccess")
@@ -443,7 +468,7 @@ export const getCourseMetadata = query({
 
     if (course) {
       const identity = await ctx.auth.getUserIdentity();
-      const isAdmin = isAdminEmail(identity?.email || args.actorEmail);
+      const isAdmin = isAdminEmail(identity?.email) || (serverAuthed && isAdminEmail(args.actorEmail));
       const rawModules: any[] = Array.isArray((course as any).modules)
         ? (course as any).modules
         : [];
@@ -463,12 +488,13 @@ export const getCourseMetadata = query({
 });
 
 export const getDayContent = query({
-  args: { dayId: v.string(), actorEmail: v.optional(v.string()) },
+  args: { dayId: v.string(), actorEmail: v.optional(v.string()), serverSecret: v.optional(v.string()) },
   handler: async (ctx, args) => {
     const identity = await ctx.auth.getUserIdentity();
-    const isAdmin = isAdminEmail(identity?.email || args.actorEmail);
+    const serverAuthed = isServerAuthorized(args.serverSecret);
+    const isAdmin = isAdminEmail(identity?.email) || (serverAuthed && isAdminEmail(args.actorEmail));
     if (!isAdmin) {
-      const student = await resolveAuthenticatedStudent(ctx, args.actorEmail);
+      const student = await resolveAuthenticatedStudent(ctx, args.actorEmail, args.serverSecret);
       await assertDayAccessible(ctx, student, args.dayId);
     }
 
@@ -481,15 +507,57 @@ export const getDayContent = query({
   },
 });
 
+export function validateDayContentPayload(content: any): any {
+  if (!content || typeof content !== "object") {
+    throw new Error("Invalid day content: payload must be a valid object");
+  }
+  const topics = Array.isArray(content.topics) ? content.topics : [];
+  if (topics.length === 0) {
+    throw new Error("Invalid day content: at least one topic is required");
+  }
+  for (let i = 0; i < topics.length; i++) {
+    const t = topics[i];
+    if (!t || typeof t !== "object" || typeof t.title !== "string" || !t.title.trim()) {
+      throw new Error(`Invalid topic at position ${i + 1}: valid title string is required`);
+    }
+    if (t.codeExamples && !Array.isArray(t.codeExamples)) {
+      throw new Error(`Invalid codeExamples at topic position ${i + 1}: must be an array`);
+    }
+  }
+
+  if (content.workedExample !== undefined) {
+    if (typeof content.workedExample !== "object" || content.workedExample === null) {
+      throw new Error("Invalid workedExample: must be a valid object");
+    }
+  }
+
+  if (content.practice !== undefined) {
+    if (!Array.isArray(content.practice)) {
+      throw new Error("Invalid practice: must be an array of practice items");
+    }
+  }
+
+  if (content.testCases !== undefined) {
+    if (!Array.isArray(content.testCases)) {
+      throw new Error("Invalid testCases: must be an array of test cases");
+    }
+  }
+
+  return content;
+}
+
 export const saveDayContent = mutation({
   args: {
     actorEmail: v.optional(v.string()),
     dayId: v.string(),
     courseId: v.optional(v.string()),
     content: v.any(),
+    serverSecret: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
-    await requireAdmin(ctx, args.actorEmail);
+    await requireAdmin(ctx, args.actorEmail, args.serverSecret);
+    validateDayContentPayload(args.content);
+
     const existing = await ctx.db
       .query("dayContent")
       .withIndex("by_day", (q) => q.eq("dayId", args.dayId))
@@ -729,6 +797,10 @@ export const submitAssessmentCode = mutation({
     code: v.string(),
     evalResults: v.optional(v.any()),
     evalError: v.optional(v.string()),
+    submissionRequestId: v.optional(v.string()),
+    graderMode: v.optional(v.string()),
+    graderVersion: v.optional(v.string()),
+    rubricVersion: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const student = await resolveAuthenticatedStudent(ctx, args.actorEmail);
@@ -736,6 +808,29 @@ export const submitAssessmentCode = mutation({
     await assertDayAccessible(ctx, student, args.dayId);
 
     const ts = new Date().toISOString();
+
+    // ── Idempotency Check: if submissionRequestId matches a recent submission, return existing ──
+    if (args.submissionRequestId) {
+      const existingByReq = await ctx.db
+        .query("testSubmissions")
+        .withIndex("by_request_id", (q) => q.eq("submissionRequestId", args.submissionRequestId!))
+        .first();
+
+      if (existingByReq && existingByReq.studentId === student.id) {
+        return {
+          success: true,
+          submissionId: existingByReq.id,
+          evalStatus: existingByReq.evalStatus,
+          score: existingByReq.score,
+          maxScore: existingByReq.maxScore,
+          percentage: existingByReq.percentage,
+          passedTests: existingByReq.passedTests,
+          failedTests: existingByReq.failedTests,
+          evalResults: existingByReq.evalDetails?.results || [],
+          idempotent: true,
+        };
+      }
+    }
 
     const existing = await ctx.db
       .query("testSubmissions")
@@ -759,8 +854,10 @@ export const submitAssessmentCode = mutation({
             const passed = results.filter((r) => r.pass).length;
             const total = results.length;
             const failed = total - passed;
-            const percentage = Math.round((passed / total) * 100);
-            const score = Math.round((passed / total) * maxScore);
+            const rawPercentage = (passed / total) * 100;
+            const rawScore = (passed / total) * maxScore;
+            const percentage = Math.min(Math.max(0, Math.round(rawPercentage)), 100);
+            const score = Math.min(Math.max(0, Math.round(rawScore * 10) / 10), maxScore);
             const feedback = args.evalError
               ? args.evalError.slice(0, 500)
               : `${passed} of ${total} test case${total === 1 ? "" : "s"} passed (${percentage}%).`;
@@ -768,6 +865,9 @@ export const submitAssessmentCode = mutation({
           })();
 
     const finalEvalStatus = auto ? "auto" : "pending";
+    const graderMode = args.graderMode || (auto ? "ai-assisted" : "pending");
+    const graderVersion = args.graderVersion || "1.3.1";
+    const rubricVersion = args.rubricVersion || "v1";
     let subId = existing?.id || "sub-" + Date.now();
 
     if (existing) {
@@ -777,6 +877,11 @@ export const submitAssessmentCode = mutation({
       await ctx.db.patch(existing._id, {
         code: args.code,
         submittedAt: ts,
+        submissionRequestId: args.submissionRequestId,
+        graderMode,
+        graderVersion,
+        rubricVersion,
+        evalTimestamp: ts,
         ...(auto
           ? {
               score: auto.score,
@@ -804,6 +909,11 @@ export const submitAssessmentCode = mutation({
         code: args.code,
         maxScore,
         submittedAt: ts,
+        submissionRequestId: args.submissionRequestId,
+        graderMode,
+        graderVersion,
+        rubricVersion,
+        evalTimestamp: ts,
         ...(auto
           ? {
               score: auto.score,
@@ -831,6 +941,7 @@ export const submitAssessmentCode = mutation({
       details: `${args.testType} assessment for Day ${args.dayNumber} (${args.testId})${
         auto ? ` — ${auto.passed}/${auto.total} tests passed (${auto.percentage}%)` : ""
       }`,
+      metadata: { graderMode, graderVersion, rubricVersion },
     });
 
     return {
@@ -843,6 +954,9 @@ export const submitAssessmentCode = mutation({
       passedTests: auto?.passed,
       failedTests: auto?.failed,
       evalResults: args.evalResults,
+      graderMode,
+      graderVersion,
+      rubricVersion,
     };
   },
 });
@@ -1364,15 +1478,14 @@ ${
       console.warn("[Admin Copilot] Could not query live admin data:", dbErr);
     }
 
-    // ── Check if the admin explicitly requested to PUBLISH or POST an announcement ──
+    // ── Check if the admin requested to draft or preview an announcement ──
     const isPublishRequest =
-      /\b(publish|post|broadcast|send)\b.*\b(announcement|notice|update)\b/i.test(args.message) ||
-      /\b(publish|post|broadcast)\s+(it|this|now)\b/i.test(args.message) ||
-      /^(publish|post)\b/i.test(args.message.trim());
+      /\b(publish|post|broadcast|send|draft|create)\b.*\b(announcement|notice|update)\b/i.test(args.message) ||
+      /\b(publish|post|broadcast)\s+(it|this|now)\b/i.test(args.message);
 
     if (isPublishRequest) {
       try {
-        const parsePrompt = `You are extracting or creating an announcement to be immediately published to Kriora LMS.
+        const parsePrompt = `You are drafting an announcement for the administrator to review before publishing to Kriora LMS.
 Admin instruction: "${args.message}"
 Recent conversation context:
 ${(args.history || []).slice(-3).map((m) => `${m.role}: ${m.content}`).join("\n")}
@@ -1396,28 +1509,22 @@ Respond ONLY with valid JSON in this exact structure:
           if (annData.title && annData.content) {
             const adminEmail = args.actorEmail || ADMIN_EMAILS[0];
             const author = getAdminAuthorName(adminEmail);
-            await ctx.runMutation(api.lms.upsertAnnouncement, {
-              actorEmail: adminEmail,
-              title: annData.title,
-              content: annData.content,
-              author,
-              isPinned: !!annData.isPinned,
-            });
 
-            const replyText = `📢 **Announcement Published to Kriora LMS**
+            const replyText = `📢 **Announcement Draft Created** (Ready for Review)
 
 ### **${annData.title}**
+*Author: ${author}*
 
 ${annData.content}
 
 ---
-✅ **Live Broadcast Status:** Successfully published to Convex Cloud! This announcement is now live in real-time across both the **Admin Portal** and all **Student Dashboards**.`;
+💡 **Admin Confirmation Required:** To publish this to all enrolled students, navigate to the **Announcements** tab in your Admin Portal and click **New Announcement** or use the announcement editor with this content.`;
 
-            return { success: true, text: replyText, reply: replyText };
+            return { success: true, text: replyText, reply: replyText, draft: annData };
           }
         }
       } catch (pubErr) {
-        console.warn("[Admin Copilot] Auto-publish execution failed:", pubErr);
+        console.warn("[Admin Copilot] Draft generation failed:", pubErr);
       }
     }
 

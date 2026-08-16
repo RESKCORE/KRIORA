@@ -145,15 +145,45 @@ export default defineSchema({
     passedTests: v.optional(v.number()),
     failedTests: v.optional(v.number()),
     evalDetails: v.optional(v.any()),
+    graderMode: v.optional(v.string()),
+    graderVersion: v.optional(v.string()),
+    rubricVersion: v.optional(v.string()),
+    evalTimestamp: v.optional(v.string()),
+    submissionRequestId: v.optional(v.string()),
   })
     .index("by_student", ["studentId"])
     .index("by_student_test", ["studentId", "testId"])
     .index("by_batch", ["batchId"])
     .index("by_eval_status", ["evalStatus"])
+    .index("by_request_id", ["submissionRequestId"])
     .index("by_custom_id", ["id"]),
 
   // ── Announcements, Audit & Config ──────────────────────────────────────────
-  announcements: defineTable(v.any()).index("by_custom_id", ["id"]),
-  auditLogs: defineTable(v.any()).index("by_custom_id", ["id"]),
+  announcements: defineTable({
+    id: v.string(),
+    title: v.string(),
+    content: v.string(),
+    author: v.optional(v.string()),
+    publishedAt: v.optional(v.string()),
+    isPinned: v.optional(v.boolean()),
+    targetBatchId: v.optional(v.string()),
+    priority: v.optional(v.string()),
+    createdAt: v.optional(v.string()),
+    updatedAt: v.optional(v.string()),
+  }).index("by_custom_id", ["id"]),
+
+  auditLogs: defineTable({
+    id: v.string(),
+    timestamp: v.string(),
+    userId: v.optional(v.string()),
+    userName: v.optional(v.string()),
+    userEmail: v.optional(v.string()),
+    role: v.optional(v.string()),
+    action: v.string(),
+    details: v.optional(v.string()),
+    metadata: v.optional(v.any()),
+  }).index("by_custom_id", ["id"]),
+
   config: defineTable(v.any()),
 });
+

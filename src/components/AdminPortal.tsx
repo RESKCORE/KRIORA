@@ -400,9 +400,13 @@ export default function AdminPortal({
   const handleAiAutoGrade = async (sub: TestSubmission) => {
     setAiEvaluatingId(sub.id);
     try {
+      const sessionToken = await getToken();
       const res = await fetch("/api/lms/evaluate-test", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          ...(sessionToken ? { Authorization: `Bearer ${sessionToken}` } : {}),
+        },
         body: JSON.stringify({
           code: sub.code,
           dayNumber: sub.dayNumber,
@@ -526,58 +530,8 @@ export default function AdminPortal({
         }
       }
 
-      // 3. Tertiary: Client-side Gemini Fallback
       if (!replyText) {
-        const geminiKey = (import.meta as any).env?.VITE_GEMINI_API_KEY;
-        if (geminiKey) {
-          const systemInstruction = `You are the Kriora LMS Admin Assistant.
-Help the administrator draft announcements, summarize student performance, and plan curriculum topics.
-Provide polished, professional copy ready to publish. Refer to the platform as Kriora LMS.`;
-
-          const contents = [
-            ...copilotMessages.slice(-6).map((m) => ({
-              role: m.sender === "user" ? "user" : "model",
-              parts: [{ text: m.text }],
-            })),
-            {
-              role: "user",
-              parts: [{ text: promptText }],
-            },
-          ];
-
-          const models = ["gemini-2.5-flash", "gemini-2.5-flash-lite", "gemini-3.7-flash"];
-          for (const model of models) {
-            try {
-              const geminiRes = await fetch(
-                `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${geminiKey}`,
-                {
-                  method: "POST",
-                  headers: { "Content-Type": "application/json" },
-                  body: JSON.stringify({
-                    contents,
-                    systemInstruction: { parts: [{ text: systemInstruction }] },
-                    generationConfig: { temperature: 0.7 },
-                  }),
-                }
-              );
-
-              if (geminiRes.ok) {
-                const geminiData = await geminiRes.json();
-                const text = geminiData?.candidates?.[0]?.content?.parts?.[0]?.text;
-                if (text) {
-                  replyText = text;
-                  break;
-                }
-              }
-            } catch (e) {
-              console.warn(`[Admin Copilot] Direct fallback with ${model} failed:`, e);
-            }
-          }
-        }
-      }
-
-      if (!replyText) {
-        throw new Error("Unable to synthesize response. Please verify AI API configuration.");
+        throw new Error("AI Admin Assistant is temporarily unavailable. All administrative and curriculum management functions remain fully operational.");
       }
 
       const aiMsg: CopilotMsg = {

@@ -4,8 +4,8 @@ import dotenv from 'dotenv';
 import { verifyToken, createClerkClient } from '@clerk/express';
 import { ConvexHttpClient } from 'convex/browser';
 
-dotenv.config();
-dotenv.config({ path: '.env.local' });
+dotenv.config({ quiet: true });
+dotenv.config({ path: '.env.local', quiet: true });
 
 const DEFAULT_ADMIN_EMAILS = [
   'reddysantosh1310@gmail.com',
@@ -214,58 +214,165 @@ async function generateAIWithFallback(opts: {
   throw new Error('No AI provider keys configured (GEMINI_API_KEY or OPENROUTER_API_KEY).');
 }
 
+import { APP_VERSION, EVALUATOR_VERSION, RUBRIC_VERSION } from './src/lib/constants';
+
+interface RateLimitBucket {
+  count: number;
+  resetAt: number;
+}
+const rateLimitMap = new Map<string, RateLimitBucket>();
+
+function createRateLimiter(maxRequests: number, windowMs: number = 60000) {
+  return (req: express.Request, res: express.Response, next: express.NextFunction) => {
+    const ip = req.ip || req.headers['x-forwarded-for'] || req.socket.remoteAddress || 'unknown-client';
+    const key = `${req.path}:${ip}`;
+    const now = Date.now();
+
+    let bucket = rateLimitMap.get(key);
+    if (!bucket || now > bucket.resetAt) {
+      bucket = { count: 1, resetAt: now + windowMs };
+      rateLimitMap.set(key, bucket);
+    } else {
+      bucket.count += 1;
+    }
+
+    res.setHeader('X-RateLimit-Limit', maxRequests);
+    res.setHeader('X-RateLimit-Remaining', Math.max(0, maxRequests - bucket.count));
+    res.setHeader('X-RateLimit-Reset', Math.ceil(bucket.resetAt / 1000));
+
+    if (bucket.count > maxRequests) {
+      return res.status(429).json({
+        error: 'Too many requests. Please wait a moment before trying again.',
+        category: 'RATE_LIMIT_EXCEEDED',
+        retryAfterSeconds: Math.ceil((bucket.resetAt - now) / 1000),
+      });
+    }
+
+    next();
+  };
+}
+
 export function createApp() {
   const app = express();
-  app.use(express.json());
+  app.use(express.json({ limit: '1mb' }));
 
-  // ─── System Health Endpoint ────────────────────────────────────────────────
-  app.get('/api/health', (_req, res) => {
-    res.json({
-      ai: !!(process.env.GEMINI_API_KEY || process.env.OPENROUTER_API_KEY),
-      gemini: !!process.env.GEMINI_API_KEY,
-      openrouter: !!process.env.OPENROUTER_API_KEY,
-      convex: !!(process.env.VITE_CONVEX_URL || process.env.CONVEX_URL),
+  // ─── Request Correlation & Structured Logging Middleware ──────────────────
+  app.use((req, res, next) => {
+    const reqId = (req.headers['x-request-id'] as string) || `req_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+    res.setHeader('x-request-id', reqId);
+    (req as any).id = reqId;
+
+    const start = Date.now();
+    res.on('finish', () => {
+      const duration = Date.now() - start;
+      if (!req.path.startsWith('/assets') && !req.path.endsWith('.js') && !req.path.endsWith('.css') && !req.path.endsWith('.png')) {
+        console.log(JSON.stringify({
+          type: 'HTTP_ACCESS',
+          requestId: reqId,
+          method: req.method,
+          path: req.path,
+          status: res.statusCode,
+          durationMs: duration,
+          timestamp: new Date().toISOString(),
+        }));
+      }
+    });
+    next();
+  });
+
+  // ─── System Health Endpoint (Liveness Check) ───────────────────────────────
+  app.get(['/api/health', '/health'], (req, res) => {
+    res.status(200).json({
       status: 'ok',
+      service: 'kriora-lms-api',
+      version: APP_VERSION,
       timestamp: new Date().toISOString(),
+      requestId: (req as any).id || 'liveness-check',
     });
   });
 
-  console.log("=================================================");
-  console.log("KRIORA LMS — STREAMLINED BACKEND GATEWAY");
-  console.log("AI Engine: Google Gemini + OpenRouter Fallback Active");
-  console.log("Database: Convex Serverless Cloud");
-  console.log("=================================================");
+  // ─── System Readiness Endpoint (Configuration & Dependency Check) ───────────
+  app.get(['/api/readiness', '/readiness'], (req, res) => {
+    const hasConvex = !!(process.env.VITE_CONVEX_URL || process.env.CONVEX_URL);
+    const hasGemini = !!(process.env.GEMINI_API_KEY || process.env.VITE_GEMINI_API_KEY);
+    const hasOpenRouter = !!(process.env.OPENROUTER_API_KEY || process.env.VITE_OPENROUTER_API_KEY);
+    const hasClerk = !!process.env.CLERK_SECRET_KEY;
 
-  // ─── AI Chat: Student Tutor ────────────────────────────────────────────────
-  app.post(['/api/chat', '/chat'], async (req, res) => {
+    const isReady = hasConvex;
+    const statusCode = isReady ? 200 : 503;
+
+    res.status(statusCode).json({
+      status: isReady ? 'ready' : 'degraded',
+      service: 'kriora-lms-api',
+      version: APP_VERSION,
+      timestamp: new Date().toISOString(),
+      requestId: (req as any).id || 'readiness-check',
+      dependencies: {
+        convexConfigured: hasConvex,
+        aiConfigured: hasGemini || hasOpenRouter,
+        geminiConfigured: hasGemini,
+        openRouterConfigured: hasOpenRouter,
+        clerkConfigured: hasClerk,
+      },
+    });
+  });
+
+  // ─── AI Chat: Student Tutor (Throttled & Bounded) ──────────────────────────
+  app.post(['/api/chat', '/chat'], createRateLimiter(30), async (req, res) => {
     try {
-      const { message, systemInstruction, history } = req.body;
-      if (!message) return res.status(400).json({ error: 'Message required.' });
-      
-      const allMsgs = [...(history || []), { role: 'user', content: message }];
+      await verifyUserSession(req);
+
+      const { message, systemInstruction, history } = req.body || {};
+      if (!message || typeof message !== 'string' || !message.trim()) {
+        return res.status(400).json({ error: 'Valid message string is required.' });
+      }
+      if (message.length > 4000) {
+        return res.status(400).json({ error: 'Message exceeds maximum allowable length (4000 characters).' });
+      }
+
+      const safeHistory = Array.isArray(history) ? history.slice(-12) : [];
+      const allMsgs = [...safeHistory, { role: 'user', content: message.trim() }];
+
       const text = await generateAIWithFallback({
-        system: systemInstruction || 'You are a helpful and patient Python programming tutor for Kriora LMS. Keep explanations clear, encouraging, and focused on learning.',
+        system: (typeof systemInstruction === 'string' && systemInstruction.trim())
+          ? systemInstruction.slice(0, 2000)
+          : 'You are a helpful and patient Python programming tutor for Kriora LMS. Keep explanations clear, encouraging, and focused on learning.',
         messages: allMsgs,
       });
-      res.json({ text });
+
+      res.json({ text, status: 'success' });
     } catch (err: any) {
-      console.error('[Chat API Error]:', err);
-      res.status(500).json({ error: err.message || 'AI Chat failed.' });
+      console.error('[Chat API Error]:', err?.message || 'Chat generation failed');
+      const statusCode = err?.message?.includes('Unauthorized') || err?.message?.includes('not configured') ? 401 : (err?.message?.includes('Forbidden') ? 403 : 500);
+      res.status(statusCode).json({
+        error: statusCode === 500
+          ? 'AI Study Companion is temporarily unavailable. Please try again in a moment.'
+          : (err?.message || 'Unauthorized'),
+        category: statusCode === 500 ? 'AI_SERVICE_UNAVAILABLE' : 'AUTH_ERROR',
+      });
     }
   });
 
-  // ─── AI Chat: Admin Assistant (Draft Announcements & Lesson Content) ────────
-  app.post(['/api/admin/chat', '/admin/chat'], async (req, res) => {
+  // ─── AI Chat: Admin Assistant (Protected & Throttled) ───────────────────────
+  app.post(['/api/admin/chat', '/admin/chat'], createRateLimiter(15), async (req, res) => {
     try {
-      const { message, prompt, history } = req.body;
-      const userText = message || prompt;
+      await verifyAdmin(req);
+
+      const { message, prompt, history } = req.body || {};
+      const userText = (typeof message === 'string' && message.trim()) || (typeof prompt === 'string' && prompt.trim());
       if (!userText) return res.status(400).json({ error: 'Message required.' });
-      
+      if (userText.length > 4000) {
+        return res.status(400).json({ error: 'Prompt exceeds maximum allowable length (4000 characters).' });
+      }
+
       const system = `You are the Kriora LMS Admin Assistant.
 Help the administrator draft announcements, summarize student performance, and plan curriculum topics.
-Provide polished, professional copy ready to publish. Refer to the platform as Kriora LMS.`;
+Provide polished, professional copy ready to publish. Refer to the platform as Kriora LMS.
+Always note that administrative publishing actions require explicit confirmation.`;
 
-      const allMsgs = [...(history || []), { role: 'user', content: userText }];
+      const safeHistory = Array.isArray(history) ? history.slice(-12) : [];
+      const allMsgs = [...safeHistory, { role: 'user', content: userText }];
+
       const text = await generateAIWithFallback({
         system,
         messages: allMsgs,
@@ -274,14 +381,21 @@ Provide polished, professional copy ready to publish. Refer to the platform as K
 
       res.json({ success: true, text, reply: text });
     } catch (err: any) {
-      console.error('[Admin Chat API Error]:', err);
-      res.status(500).json({ success: false, error: err.message || 'Admin assistant failed.' });
+      console.error('[Admin Chat API Error]:', err?.message || 'Admin chat failed');
+      const statusCode = err?.message?.includes('Unauthorized') ? 401 : (err?.message?.includes('Forbidden') ? 403 : 500);
+      res.status(statusCode).json({
+        success: false,
+        error: err?.message || 'Admin Assistant is temporarily unavailable.',
+        category: statusCode === 500 ? 'AI_SERVICE_UNAVAILABLE' : 'AUTH_ERROR',
+      });
     }
   });
 
   // ─── Student Assessment Evaluation (AI Marks & Feedback) ───────────────────
-  app.post(['/api/lms/evaluate-test', '/lms/evaluate-test', '/evaluate-test'], async (req, res) => {
+  app.post(['/api/lms/evaluate-test', '/lms/evaluate-test', '/evaluate-test'], createRateLimiter(20), async (req, res) => {
     try {
+      const session = await verifyUserSession(req);
+
       const {
         code,
         dayNumber,
@@ -290,38 +404,48 @@ Provide polished, professional copy ready to publish. Refer to the platform as K
         testCases,
         maxScore = 10,
         testType = 'daily',
-      } = req.body;
+        submissionRequestId,
+      } = req.body || {};
 
-      if (!code || !code.trim()) {
-        return res.status(400).json({ error: 'Code is required for assessment evaluation.' });
+      if (!code || typeof code !== 'string' || !code.trim()) {
+        return res.status(400).json({ error: 'Valid Python code string is required for assessment evaluation.' });
       }
+      if (code.length > 10000) {
+        return res.status(400).json({ error: 'Submitted code exceeds maximum length limit (10,000 characters).' });
+      }
+
+      const sanitizedDayNumber = typeof dayNumber === 'number' ? dayNumber : (Number(dayNumber) || 1);
+      await authorizeEvaluator(req, session, sanitizedDayNumber);
+
+      const sanitizedMaxScore = typeof maxScore === 'number' && maxScore > 0 ? Math.min(maxScore, 100) : 10;
+      const evalTimestamp = new Date().toISOString();
 
       const prompt = `You are an expert Python programming instructor and evaluator for Kriora LMS.
 Evaluate the student's Python code submission fairly, accurately, and thoroughly.
 
 ASSESSMENT CONTEXT:
 - Test Type: ${testType}
-- Day Number: ${dayNumber ?? 'N/A'}
+- Day Number: ${sanitizedDayNumber}
 - Topic/Day Title: ${dayTitle ?? 'Python Assessment'}
 - Task / Problem Description: ${taskDescription || 'Python Daily Coding Assessment'}
 - Deterministic Reference Cases (if any): ${JSON.stringify(testCases || [])}
-- Max Possible Marks: ${maxScore}
+- Max Possible Marks: ${sanitizedMaxScore}
 
 STUDENT'S SUBMITTED PYTHON CODE:
 \`\`\`python
-${code}
+${code.slice(0, 8000)}
 \`\`\`
 
 EVALUATION RULES:
 1. Syntax & Execution: Check for valid Python syntax, proper indentation, and runnability.
 2. Correctness: Verify if the solution fulfills the required tasks and logic.
-3. Scoring: Award fair marks between 0 and ${maxScore}.
+3. Scoring: Award fair marks between 0 and ${sanitizedMaxScore}.
 4. Percentage: Calculate percentage integer between 0 and 100 based on score / maxScore.
 5. Feedback: Write 2-3 encouraging, constructive sentences explaining what worked well and specific tips for improvement.
 
 Return a valid JSON object ONLY:
 {
-  "score": <number between 0 and ${maxScore}>,
+  "score": <number between 0 and ${sanitizedMaxScore}>,
   "percentage": <integer between 0 and 100>,
   "passedTests": <integer number of passed criteria>,
   "failedTests": <integer number of failed criteria>,
@@ -349,19 +473,19 @@ Return a valid JSON object ONLY:
 
       const parsed = JSON.parse(jsonMatch[0]);
       const score = typeof parsed.score === 'number'
-        ? Math.min(Math.max(0, Math.round(parsed.score * 10) / 10), maxScore)
-        : Math.round(maxScore * 0.8);
+        ? Math.min(Math.max(0, Math.round(parsed.score * 10) / 10), sanitizedMaxScore)
+        : Math.round(sanitizedMaxScore * 0.8);
       const percentage = typeof parsed.percentage === 'number'
         ? Math.min(Math.max(0, Math.round(parsed.percentage)), 100)
-        : Math.round((score / maxScore) * 100);
+        : Math.min(100, Math.round((score / sanitizedMaxScore) * 100));
       const passedTests = typeof parsed.passedTests === 'number'
-        ? parsed.passedTests
+        ? Math.max(0, parsed.passedTests)
         : (percentage >= 70 ? 1 : 0);
       const failedTests = typeof parsed.failedTests === 'number'
-        ? parsed.failedTests
+        ? Math.max(0, parsed.failedTests)
         : (percentage >= 70 ? 0 : 1);
       const feedback = typeof parsed.feedback === 'string' && parsed.feedback.trim()
-        ? parsed.feedback.trim()
+        ? parsed.feedback.trim().slice(0, 1000)
         : `${passedTests} requirement(s) passed (${percentage}%).`;
       const evalResults = Array.isArray(parsed.evalResults) && parsed.evalResults.length > 0
         ? parsed.evalResults
@@ -377,23 +501,61 @@ Return a valid JSON object ONLY:
       res.json({
         success: true,
         score,
-        maxScore,
+        maxScore: sanitizedMaxScore,
         percentage,
         passedTests,
         failedTests,
         feedback,
         evalResults,
         evalStatus: 'auto',
+        graderMode: 'ai-assisted',
+        graderVersion: EVALUATOR_VERSION,
+        rubricVersion: RUBRIC_VERSION,
+        evalTimestamp,
+        submissionRequestId,
       });
     } catch (err: any) {
-      console.error('[Assessment Evaluation API Error]:', err);
-      res.status(500).json({ success: false, error: err.message || 'Evaluation failed.' });
+      console.error('[Assessment Evaluation API Error]:', err?.message || 'Evaluation error');
+      const statusCode = err?.message?.includes('Unauthorized') || err?.message?.includes('not configured') ? 401 : (err?.message?.includes('Forbidden') ? 403 : 500);
+      res.status(statusCode).json({
+        success: false,
+        error: statusCode === 500
+          ? 'Assessment evaluation service is temporarily busy. Please retry.'
+          : (err?.message || 'Unauthorized'),
+        category: statusCode === 500 ? 'EVALUATION_SERVICE_ERROR' : 'AUTH_ERROR',
+      });
     }
   });
 
 
 
-  // ─── Gemini Course Content Generation (Admin Only) ─────────────────────────
+  function devAuthBypassEnabled(): boolean {
+    if (process.env.VERCEL === '1' || process.env.NOW_REGION || process.env.AWS_LAMBDA_FUNCTION_NAME) return false;
+    return process.env.NODE_ENV === 'development' && process.env.ALLOW_DEV_AUTH_BYPASS === 'true';
+  }
+
+  async function verifyUserSession(req: express.Request): Promise<{ userId: string; email?: string; role?: string }> {
+    const token = (req.headers.authorization || '').replace(/^Bearer\s+/i, '');
+    const secret = process.env.CLERK_SECRET_KEY;
+    if (!secret) {
+      if (devAuthBypassEnabled()) {
+        return { userId: 'local-dev-user', role: 'development' };
+      }
+      throw new Error('Server authentication is not configured');
+    }
+    if (!token) {
+      throw new Error('Unauthorized: Clerk session token required');
+    }
+    try {
+      const claims = await verifyToken(token, { secretKey: secret });
+      const email = typeof claims?.email === 'string' ? claims.email : undefined;
+      const role = (claims as any)?.role || (claims as any)?.publicMetadata?.role || undefined;
+      return { userId: claims.sub || 'authenticated-user', email, role };
+    } catch {
+      throw new Error('Unauthorized: Invalid or expired session token');
+    }
+  }
+
   async function verifyAdmin(req: express.Request): Promise<string> {
     const token = (req.headers.authorization || '').replace(/^Bearer\s+/i, '');
     const secret = process.env.CLERK_SECRET_KEY;
@@ -402,18 +564,67 @@ Return a valid JSON object ONLY:
     try {
       claims = await verifyToken(token, { secretKey: secret });
     } catch {
-      throw new Error('Unauthorized: invalid or expired session');
+      throw new Error('Unauthorized: Invalid or expired session');
     }
     let email = typeof claims?.email === 'string' ? claims.email : '';
+    const role = claims?.role || claims?.publicMetadata?.role;
+    if (role === 'admin') {
+      return email || claims?.sub || 'admin';
+    }
     if (!email && claims?.sub) {
       try {
         const user = await createClerkClient({ secretKey: secret }).users.getUser(claims.sub);
         email = user.emailAddresses?.[0]?.emailAddress || '';
+        if ((user.publicMetadata as any)?.role === 'admin') {
+          return email || claims.sub;
+        }
       } catch { /* fall through */ }
     }
-    if (!email || !isAdminEmail(email)) throw new Error('Forbidden: admins only');
+    if (!email || !isAdminEmail(email)) throw new Error('Forbidden: Access restricted to LMS Administrators');
     return email.trim().toLowerCase();
   }
+
+  // Caller may run AI evaluation only if they are a verified admin or an enrolled student
+  // with access to the requested curriculum day. Identity comes from the verified session,
+  // never from client-supplied fields.
+  async function authorizeEvaluator(
+    req: express.Request,
+    session: { userId: string; email?: string; role?: string },
+    dayNumber: number
+  ): Promise<void> {
+    if (session.role === 'development') return;
+    if (session.email && isAdminEmail(session.email)) return;
+
+    const CONVEX_URL = process.env.VITE_CONVEX_URL || process.env.CONVEX_URL;
+    if (!CONVEX_URL || !session.email) {
+      throw new Error('Forbidden: Assessment evaluation requires a verified student or admin account');
+    }
+    try {
+      const client: any = new ConvexHttpClient(CONVEX_URL);
+      const studentCtx: any = await client.query('lms:getMyStudentContext', { actorEmail: session.email, serverSecret: process.env.CONVEX_SERVER_SECRET });
+      const student = studentCtx?.student;
+      if (!student) {
+        throw new Error('Forbidden: Assessment evaluation requires a verified student or admin account');
+      }
+
+      const meta: any = await client.query('lms:getCourseMetadata', { courseId: 'python-mastery', actorEmail: session.email, serverSecret: process.env.CONVEX_SERVER_SECRET });
+      const day = (meta?.course?.modules || [])
+        .flatMap((m: any) => m.days || [])
+        .find((d: any) => d.dayNumber === dayNumber);
+      if (!day) throw new Error('Forbidden: Day not released');
+      if (day.releaseStatus !== 'locked') return;
+
+      if (!student.batchId) throw new Error('Forbidden: Day not released');
+      const grants = Array.isArray(studentCtx?.dayAccessGrants) ? studentCtx.dayAccessGrants : [];
+      const granted = grants.some((g: any) => g.dayId === day.id);
+      if (!granted) throw new Error('Forbidden: Day not released to your batch');
+    } catch (err: any) {
+      if (err?.message?.includes('Forbidden')) throw err;
+      throw new Error('Forbidden: Assessment evaluation requires a verified student or admin account');
+    }
+  }
+
+  // ─── Gemini Course Content Generation (Admin Only) ─────────────────────────
 
   function validateAndMerge(generated: any, expectedTopics: any[], existing: any, day: any) {
     const topics = Array.isArray(generated.topics) ? generated.topics : null;
@@ -495,7 +706,7 @@ Return a valid JSON object ONLY:
       if (!CONVEX_URL) return res.status(500).json({ error: 'CONVEX_URL is not configured.' });
       const client: any = new ConvexHttpClient(CONVEX_URL);
 
-      const meta: any = await client.query('lms:getCourseMetadata', { actorEmail: adminEmail, courseId: 'python-mastery' });
+      const meta: any = await client.query('lms:getCourseMetadata', { actorEmail: adminEmail, courseId: 'python-mastery', serverSecret: process.env.CONVEX_SERVER_SECRET });
       const modules = meta?.course?.modules || [];
       const allDays = modules.flatMap((m: any) => m.days || []);
       const day = allDays.find((d: any) => d.id === dayId);
@@ -506,7 +717,7 @@ Return a valid JSON object ONLY:
         .sort((a: any, b: any) => (a.order || 0) - (b.order || 0));
       if (expectedTopics.length === 0) return res.status(400).json({ error: 'This day has no topics in the curriculum.' });
 
-      const existing = (await client.query('lms:getDayContent', { actorEmail: adminEmail, dayId })) || {};
+      const existing = (await client.query('lms:getDayContent', { actorEmail: adminEmail, dayId, serverSecret: process.env.CONVEX_SERVER_SECRET })) || {};
       const parentModule = modules.find((m: any) => m.id === day.moduleId);
       const phase = existing.phase || parentModule?.title || '';
 
@@ -557,7 +768,7 @@ Return ONLY a JSON object with this exact shape:
       const generated = JSON.parse(match[0]);
 
       const content = validateAndMerge(generated, expectedTopics, existing, day);
-      await client.mutation('lms:saveDayContent', { actorEmail: adminEmail, dayId, courseId: day.courseId || 'python-mastery', content });
+      await client.mutation('lms:saveDayContent', { actorEmail: adminEmail, dayId, courseId: day.courseId || 'python-mastery', content, serverSecret: process.env.CONVEX_SERVER_SECRET });
 
       res.json({ success: true, dayId, content });
     } catch (err: any) {
@@ -591,8 +802,18 @@ export async function startServer() {
   });
 }
 
-// Automatically start standalone server if not running inside Vercel serverless environment
-if (process.env.VERCEL !== '1') {
+// Check if this script was directly invoked from CLI (e.g. `tsx server.ts` or `node dist/server.cjs`)
+const isDirectExecution = (() => {
+  if (process.env.STANDALONE === '1') return true;
+  if (process.env.VERCEL === '1' || process.env.AWS_LAMBDA_FUNCTION_NAME || process.env.NOW_REGION) return false;
+  const entry = process.argv[1];
+  if (!entry) return false;
+  const normalized = entry.replace(/\\/g, '/');
+  return normalized.endsWith('/server.ts') || normalized.endsWith('/server.cjs') || normalized.endsWith('/server.js');
+})();
+
+if (isDirectExecution) {
   startServer().catch(console.error);
 }
+
 

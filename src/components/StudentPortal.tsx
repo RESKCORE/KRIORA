@@ -8,7 +8,7 @@ import {
   PanelLeftClose, PanelLeftOpen, Copy, BookMarked, Eye, Flame, ArrowLeft
 } from "lucide-react";
 import { useQuery, useMutation, useAction } from "convex/react";
-import { useUser } from "@clerk/clerk-react";
+import { useUser, useAuth } from "@clerk/clerk-react";
 import { api } from "../../convex/_generated/api";
 import { Button } from "@/components/ui/button";
 import { Card, CardHeader, CardTitle, CardContent, CardFooter } from "@/components/ui/card";
@@ -20,6 +20,7 @@ import { StatCard, StatusPill, PageHeader, EmptyState } from "@/components/ui/ad
 import type { Course, Student, Announcement, LMSConfig, CourseDay, CourseModule, Topic, Batch, BatchDayAccess, TestSubmission } from "../types";
 import PythonCompiler from "./PythonCompiler";
 import { runPythonWithStdin, normalizeOutput } from "../lib/pythonRunner";
+import { EVALUATOR_VERSION, RUBRIC_VERSION } from "../lib/constants";
 
 interface StudentPortalProps {
   actorEmail: string;
@@ -91,6 +92,7 @@ export default function StudentPortal({
   actorEmail, student, courses, announcements, notifications, config, batches, dayAccess, testSubmissions, onLogout, onRefreshState
 }: StudentPortalProps) {
   const { user } = useUser();
+  const { getToken } = useAuth();
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [isTopicSidebarOpen, setIsTopicSidebarOpen] = useState(true);
   const [playerTab, setPlayerTab] = useState<PlayerSubTab>("theory");
@@ -99,6 +101,7 @@ export default function StudentPortal({
   const [expandedModules, setExpandedModules] = useState<Record<string, boolean>>({});
   const [expandedTopicId, setExpandedTopicId] = useState<string | null>(null);
   const [assessmentCode, setAssessmentCode] = useState("");
+  const [activeSubmissionRequestId, setActiveSubmissionRequestId] = useState<string | null>(null);
   const [assessmentBusy, setAssessmentBusy] = useState(false);
   const [assessmentResult, setAssessmentResult] = useState<any | null>(null);
   const [evalStatus, setEvalStatus] = useState<"idle" | "running" | "done" | "error">("idle");
@@ -108,6 +111,7 @@ export default function StudentPortal({
     setAssessmentCode("");
     setAssessmentResult(null);
     setEvalStatus("idle");
+    setActiveSubmissionRequestId(null);
   }, [activeDayId]);
 
   // ── Track Seen Announcements for Student ────────────────────────────────
@@ -190,6 +194,8 @@ export default function StudentPortal({
     setEvalStatus("running");
     setAssessmentResult(null);
 
+    const submissionRequestId = `sub_req_${student.id}_${day.id}_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+
     try {
       let aiEval: any = null;
 
@@ -213,9 +219,13 @@ export default function StudentPortal({
       // 2. Secondary: Backend Gateway API (/api/lms/evaluate-test)
       if (!aiEval) {
         try {
+          const sessionToken = await getToken();
           const evalRes = await fetch("/api/lms/evaluate-test", {
             method: "POST",
-            headers: { "Content-Type": "application/json" },
+            headers: {
+              "Content-Type": "application/json",
+              ...(sessionToken ? { Authorization: `Bearer ${sessionToken}` } : {}),
+            },
             body: JSON.stringify({
               code: assessmentCode,
               dayNumber: day.dayNumber,
@@ -223,6 +233,7 @@ export default function StudentPortal({
               taskDescription: day.content?.workedExample?.caseStudy || day.description || day.title,
               maxScore: config?.dailyAssessmentMarks || 10,
               testType: "daily",
+              submissionRequestId,
             }),
           });
           if (evalRes.ok) {
@@ -244,6 +255,10 @@ export default function StudentPortal({
           code: assessmentCode,
           evalResults: aiEval.evalResults,
           evalError: aiEval.feedback || undefined,
+          submissionRequestId,
+          graderMode: aiEval.graderMode || "ai-assisted",
+          graderVersion: aiEval.graderVersion || EVALUATOR_VERSION,
+          rubricVersion: aiEval.rubricVersion || RUBRIC_VERSION,
         });
         setAssessmentResult({
           score: aiEval.score,
@@ -1259,7 +1274,10 @@ export default function StudentPortal({
                           <textarea
                             rows={9}
                             value={assessmentCode}
-                            onChange={(e) => setAssessmentCode(e.target.value)}
+                            onChange={(e) => {
+                              setAssessmentCode(e.target.value);
+                              setActiveSubmissionRequestId(null);
+                            }}
                             placeholder={`# Write or paste your complete Python solution code for Day ${activeDay.dayNumber} here...`}
                             className="w-full font-mono text-xs p-4 bg-slate-900 text-emerald-300 border border-slate-800 rounded-2xl focus:ring-2 focus:ring-[#FF5A36] outline-none leading-relaxed shadow-xl"
                           />

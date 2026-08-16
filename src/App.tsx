@@ -1,16 +1,18 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, lazy, Suspense } from 'react';
 import { RefreshCw, Sparkles } from 'lucide-react';
 import { useAuth, useUser } from '@clerk/clerk-react';
 import { useQuery, useMutation, useAction } from 'convex/react';
 import { api } from '../convex/_generated/api';
 
-import AuthScreen from './components/AuthScreen';
+import LandingPage from './components/LandingPage';
 import OnboardingScreen from './components/OnboardingScreen';
-import StudentPortal from './components/StudentPortal';
-import AdminPortal from './components/AdminPortal';
-import TutorDrawer from './components/TutorDrawer';
 import type { Student } from './types';
+import { ErrorBoundary } from './components/ErrorBoundary';
 import { Button } from '@/components/ui/button';
+
+const StudentPortal = lazy(() => import('./components/StudentPortal'));
+const AdminPortal = lazy(() => import('./components/AdminPortal'));
+const TutorDrawer = lazy(() => import('./components/TutorDrawer'));
 
 interface ChatMessage {
   id: string;
@@ -39,14 +41,15 @@ const ADMIN_EMAILS = Array.from(
 );
 
 export default function App() {
-  const { isLoaded: isAuthLoaded, isSignedIn, signOut } = useAuth();
+  const { isLoaded: isAuthLoaded, isSignedIn, signOut, getToken } = useAuth();
   const { user, isLoaded: isUserLoaded } = useUser();
 
   const isAuthReady = isAuthLoaded && isUserLoaded;
 
-  // --- Determine admin status from Clerk email ---
+  // --- Determine admin status from Clerk metadata or migration email fallback ---
   const clerkEmail = isAuthReady ? (user?.emailAddresses?.[0]?.emailAddress || '') : '';
-  const isAdmin = ADMIN_EMAILS.includes(clerkEmail.trim().toLowerCase());
+  const userMetadataRole = (user?.publicMetadata as any)?.role || (user?.unsafeMetadata as any)?.role;
+  const isAdmin = userMetadataRole === 'admin' || ADMIN_EMAILS.includes(clerkEmail.trim().toLowerCase());
 
   // --- Convex Reactive Queries & Mutations ---
   const bindClerkIdentity = useMutation(api.lms.bindClerkIdentity);
@@ -67,6 +70,28 @@ export default function App() {
     api.lms.getAdminDashboardData,
     isAuthReady && isSignedIn && isAdmin ? { actorEmail: clerkEmail } : "skip"
   );
+
+  // Connection timeout & retry management
+  const [connectionTimedOut, setConnectionTimedOut] = useState(false);
+  const [retryNonce, setRetryNonce] = useState(0);
+
+  // --- Loading state active ONLY when signed in and fetching portal context ---
+  const isDataLoading = isAuthReady && isSignedIn && (
+    !courseMetadataRes ||
+    (!isAdmin && studentCtx === undefined) ||
+    (isAdmin && adminData === undefined)
+  );
+
+  useEffect(() => {
+    if (!isDataLoading) {
+      setConnectionTimedOut(false);
+      return;
+    }
+    const timer = setTimeout(() => {
+      setConnectionTimedOut(true);
+    }, 10000);
+    return () => clearTimeout(timer);
+  }, [isDataLoading, retryNonce]);
 
   // Bind Clerk identity on first login/mount if signed in
   useEffect(() => {
@@ -150,9 +175,13 @@ Your RESTRICTIONS:
       // 2. Secondary: Backend Gateway API
       if (!tutorReply) {
         try {
+          const sessionToken = await getToken();
           const response = await fetch('/api/chat', {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: {
+              'Content-Type': 'application/json',
+              ...(sessionToken ? { Authorization: `Bearer ${sessionToken}` } : {}),
+            },
             body: JSON.stringify({
               message: userText,
               systemInstruction: systemPrompt,
@@ -172,51 +201,8 @@ Your RESTRICTIONS:
         }
       }
 
-      // 2. Direct Fallback: Client-side Gemini Call
       if (!tutorReply) {
-        const geminiKey = (import.meta as any).env?.VITE_GEMINI_API_KEY;
-        if (!geminiKey) {
-          throw new Error("AI tutor temporarily unavailable. Please ensure backend server is running.");
-        }
-        const contents = [
-          ...chatMessages.slice(-6).map((m) => ({
-            role: m.sender === 'user' ? 'user' : 'model',
-            parts: [{ text: m.text }],
-          })),
-          { role: 'user', parts: [{ text: userText }] },
-        ];
-
-        const models = ["gemini-2.5-flash", "gemini-2.5-flash-lite", "gemini-3.7-flash"];
-        for (const model of models) {
-          try {
-            const geminiRes = await fetch(
-              `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${geminiKey}`,
-              {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                  contents,
-                  systemInstruction: { parts: [{ text: systemPrompt }] },
-                  generationConfig: { temperature: 0.7 },
-                }),
-              }
-            );
-            if (geminiRes.ok) {
-              const data = await geminiRes.json();
-              const text = data?.candidates?.[0]?.content?.parts?.[0]?.text;
-              if (text) {
-                tutorReply = text;
-                break;
-              }
-            }
-          } catch (e) {
-            console.warn(`[Student Tutor] Direct fallback with ${model} failed:`, e);
-          }
-        }
-      }
-
-      if (!tutorReply) {
-        throw new Error("Unable to reach AI tutor. Please check your network connection.");
+        throw new Error("AI Study Companion is currently unavailable. Your lesson notes, Python compiler, and assessments are fully operational.");
       }
 
       setChatMessages(prev => [
@@ -243,10 +229,56 @@ Your RESTRICTIONS:
     }
   };
 
-  // --- Loading state until Convex reactive query returns ---
-  const isDataLoading = !isAuthReady || !courseMetadataRes || (isSignedIn && !isAdmin && studentCtx === undefined) || (isSignedIn && isAdmin && adminData === undefined);
+  // --- GATE 0: NOT SIGNED IN → RENDER LANDING PAGE IMMEDIATELY (NO LOADING SPINNER) ---
+  if (!isAuthReady || !isSignedIn) {
+    return <LandingPage />;
+  }
 
+  // --- GATE 0.25: SIGNED-IN SESSION DATA LOADING SPINNER (ADMIN / STUDENT) ---
   if (isDataLoading) {
+    if (connectionTimedOut) {
+      return (
+        <div className="min-h-screen bg-[#F8F9FA] flex flex-col items-center justify-center p-6 text-slate-800 font-sans">
+          <div className="max-w-md w-full bg-white border border-slate-200 rounded-2xl p-8 shadow-xl text-center space-y-5">
+            <div className="relative flex items-center justify-center mx-auto">
+              <img
+                src="/KRIORA_LOGO_2.png"
+                alt="Kriora Logo"
+                className="w-14 h-14 rounded-full object-cover shadow-md border-2 border-orange-100 ring-4 ring-orange-500/10"
+              />
+            </div>
+            <div className="space-y-2">
+              <h2 className="text-lg font-extrabold text-slate-900">Backend Connection Timeout</h2>
+              <p className="text-xs text-slate-500 font-mono leading-relaxed">
+                The application is taking longer than expected to connect to the Kriora Convex cloud backend.
+              </p>
+            </div>
+            <div className="space-y-2.5 pt-2">
+              <Button
+                onClick={() => {
+                  setConnectionTimedOut(false);
+                  setRetryNonce((c) => c + 1);
+                }}
+                className="w-full py-2.5 px-4 bg-[#FF5A36] hover:bg-orange-600 text-white font-bold text-xs rounded-xl shadow-md transition-all cursor-pointer flex items-center justify-center gap-2"
+              >
+                <RefreshCw className="w-3.5 h-3.5" />
+                Retry Connection
+              </Button>
+              {isSignedIn && (
+                <Button
+                  onClick={handleLogout}
+                  variant="outline"
+                  className="w-full py-2 px-4 border border-slate-200 hover:border-slate-300 text-slate-600 text-xs font-bold rounded-xl"
+                >
+                  Sign Out & Reconnect
+                </Button>
+              )}
+            </div>
+          </div>
+        </div>
+      );
+    }
+
     return (
       <div className="min-h-screen bg-white flex flex-col items-center justify-center font-mono text-xs text-slate-500 gap-4">
         <div className="relative flex items-center justify-center">
@@ -264,27 +296,24 @@ Your RESTRICTIONS:
 
   const courses = courseMetadataRes?.course ? [courseMetadataRes.course] : [];
 
-  // --- GATE 0: NOT SIGNED IN ---
-  if (!isSignedIn) {
-    return <AuthScreen />;
-  }
-
   // --- GATE 0.5: ADMIN PORTAL VIEW ---
   if (isAdmin && adminData) {
     return (
-      <AdminPortal 
-        actorEmail={clerkEmail}
-        courses={courses as any}
-        students={adminData.students as any}
-        announcements={adminData.announcements as any}
-        auditLogs={adminData.auditLogs as any}
-        config={adminData.config as any}
-        batches={adminData.batches as any}
-        dayAccess={adminData.dayAccess as any}
-        testSubmissions={adminData.testSubmissions as any}
-        onLogout={handleLogout}
-        onRefreshState={() => {}}
-      />
+      <Suspense fallback={<PortalLoading />}>
+        <AdminPortal 
+          actorEmail={clerkEmail}
+          courses={courses as any}
+          students={adminData.students as any}
+          announcements={adminData.announcements as any}
+          auditLogs={adminData.auditLogs as any}
+          config={adminData.config as any}
+          batches={adminData.batches as any}
+          dayAccess={adminData.dayAccess as any}
+          testSubmissions={adminData.testSubmissions as any}
+          onLogout={handleLogout}
+          onRefreshState={() => {}}
+        />
+      </Suspense>
     );
   }
 
@@ -427,19 +456,21 @@ Your RESTRICTIONS:
   if (dbStudent && studentCtx) {
     return (
       <div className="min-h-screen w-full relative">
-        <StudentPortal 
-          actorEmail={clerkEmail}
-          student={dbStudent}
-          courses={courses as any}
-          announcements={studentCtx.announcements as any}
-          notifications={[]}
-          config={studentCtx.config as any}
-          batches={studentCtx.batches as any}
-          dayAccess={studentCtx.dayAccessGrants as any}
-          testSubmissions={studentCtx.submissions as any}
-          onLogout={handleLogout}
-          onRefreshState={() => {}}
-        />
+        <Suspense fallback={<PortalLoading />}>
+          <StudentPortal 
+            actorEmail={clerkEmail}
+            student={dbStudent}
+            courses={courses as any}
+            announcements={studentCtx.announcements as any}
+            notifications={[]}
+            config={studentCtx.config as any}
+            batches={studentCtx.batches as any}
+            dayAccess={studentCtx.dayAccessGrants as any}
+            testSubmissions={studentCtx.submissions as any}
+            onLogout={handleLogout}
+            onRefreshState={() => {}}
+          />
+        </Suspense>
 
         <Button 
           onClick={() => setIsTutorOpen(true)}
@@ -449,20 +480,40 @@ Your RESTRICTIONS:
           <Sparkles className="w-5 h-5 text-white" />
         </Button>
 
-        <TutorDrawer 
-          isOpen={isTutorOpen}
-          onClose={() => setIsTutorOpen(false)}
-          courseTitle={courses[0]?.title || 'Python Mastery'}
-          lessonTitle=""
-          chatMessages={chatMessages}
-          userInputMessage={userInputMessage}
-          setUserInputMessage={setUserInputMessage}
-          onSendMessage={handleSendMessage}
-          isAiTyping={isAiTyping}
-        />
+        <Suspense fallback={null}>
+          <TutorDrawer 
+            isOpen={isTutorOpen}
+            onClose={() => setIsTutorOpen(false)}
+            courseTitle={courses[0]?.title || 'Python Mastery'}
+            lessonTitle=""
+            chatMessages={chatMessages}
+            userInputMessage={userInputMessage}
+            setUserInputMessage={setUserInputMessage}
+            onSendMessage={handleSendMessage}
+            isAiTyping={isAiTyping}
+          />
+        </Suspense>
       </div>
     );
   }
 
   return null;
+}
+
+function PortalLoading() {
+  return (
+    <div className="min-h-screen bg-white flex items-center justify-center">
+      <div className="flex flex-col items-center gap-3 font-mono text-xs text-slate-500">
+        <div className="relative flex items-center justify-center">
+          <img
+            src="/KRIORA_LOGO_2.png"
+            alt="Kriora Logo"
+            className="w-14 h-14 rounded-full object-cover shadow-lg border-2 border-orange-100 ring-4 ring-orange-500/10"
+          />
+          <div className="absolute -inset-1.5 rounded-full border-2 border-[#FF5A36] border-t-transparent animate-spin" />
+        </div>
+        <span className="uppercase tracking-widest text-[11px] font-bold animate-pulse text-slate-700">Loading Kriora Portal...</span>
+      </div>
+    </div>
+  );
 }
