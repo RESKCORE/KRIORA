@@ -112,7 +112,43 @@ export default function StudentPortal({
     setAssessmentResult(null);
     setEvalStatus("idle");
     setActiveSubmissionRequestId(null);
+    setTabSwitchCount(0);
+    setFocusLostCount(0);
+    setPasteCount(0);
   }, [activeDayId]);
+
+  // ── Assessment Live Proctoring Telemetry ────────────────────────────────────
+  const [tabSwitchCount, setTabSwitchCount] = useState(0);
+  const [focusLostCount, setFocusLostCount] = useState(0);
+  const [pasteCount, setPasteCount] = useState(0);
+
+  useEffect(() => {
+    if (activeTab !== "player" || playerTab !== "assessment") return;
+
+    const handleVisibility = () => {
+      if (document.hidden) {
+        setTabSwitchCount((c) => c + 1);
+      }
+    };
+
+    const handleBlur = () => {
+      setFocusLostCount((c) => c + 1);
+    };
+
+    const handlePaste = () => {
+      setPasteCount((c) => c + 1);
+    };
+
+    document.addEventListener("visibilitychange", handleVisibility);
+    window.addEventListener("blur", handleBlur);
+    window.addEventListener("paste", handlePaste);
+
+    return () => {
+      document.removeEventListener("visibilitychange", handleVisibility);
+      window.removeEventListener("blur", handleBlur);
+      window.removeEventListener("paste", handlePaste);
+    };
+  }, [activeTab, playerTab, activeDayId]);
 
   // ── Track Seen Announcements for Student ────────────────────────────────
   const [seenAnnouncementIds, setSeenAnnouncementIds] = useState<string[]>(() => {
@@ -1249,6 +1285,28 @@ export default function StudentPortal({
                             </ul>
                           </div>
                         )}
+                      </div>
+
+                      {/* Realtime Live Proctoring Telemetry Pill */}
+                      <div className="bg-slate-900 border border-slate-800 rounded-2xl p-3.5 flex items-center justify-between flex-wrap gap-3 shadow-md text-xs font-mono">
+                        <div className="flex items-center gap-2 text-slate-300">
+                          <span className="relative flex h-2.5 w-2.5">
+                            <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                            <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-emerald-500"></span>
+                          </span>
+                          <span className="font-bold text-slate-200">Live Assessment Proctoring</span>
+                        </div>
+                        <div className="flex items-center gap-2.5 text-[11px] text-slate-400 flex-wrap">
+                          <span className="bg-slate-800/80 px-2.5 py-1 rounded-lg border border-slate-700/60">
+                            Tab Switches: <strong className={tabSwitchCount > 0 ? "text-amber-400 font-bold" : "text-emerald-400 font-bold"}>{tabSwitchCount}</strong>
+                          </span>
+                          <span className="bg-slate-800/80 px-2.5 py-1 rounded-lg border border-slate-700/60">
+                            Focus Lost: <strong className={focusLostCount > 0 ? "text-amber-400 font-bold" : "text-emerald-400 font-bold"}>{focusLostCount}</strong>
+                          </span>
+                          <span className="bg-slate-800/80 px-2.5 py-1 rounded-lg border border-slate-700/60">
+                            Paste Events: <strong className="text-slate-200 font-bold">{pasteCount}</strong>
+                          </span>
+                        </div>
                       </div>
 
                       {/* Interactive Python Compiler Sandbox */}

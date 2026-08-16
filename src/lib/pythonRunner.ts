@@ -32,11 +32,14 @@ export function getPyodideInstance(): Promise<any> {
   return pyodidePromise;
 }
 
+export const DEFAULT_EXECUTION_TIMEOUT_MS = 6000;
+
 // Run student code with the given stdin, capture stdout/error.
-// Mirrors the sandbox used by PythonCompiler.tsx (Pyodide first, server fallback).
+// Features execution timeout watchdog to prevent browser freezing on infinite loops.
 export async function runPythonWithStdin(
   code: string,
-  stdin: string
+  stdin: string,
+  timeoutMs: number = DEFAULT_EXECUTION_TIMEOUT_MS
 ): Promise<{ stdout: string; stderr: string; error: string | null }> {
   try {
     const py = await getPyodideInstance();
@@ -74,7 +77,14 @@ if exec_err:
 
 json.dumps({"stdout": std_out_val, "stderr": std_err_val, "error": exec_err})
 `;
-    const resultJsonStr = await py.runPythonAsync(runnerScript);
+    const execPromise = py.runPythonAsync(runnerScript);
+    const timeoutPromise = new Promise<never>((_, reject) => {
+      setTimeout(() => {
+        reject(new Error(`Execution timed out (exceeded ${timeoutMs}ms limit). Check for infinite loops or blocking operations.`));
+      }, timeoutMs);
+    });
+
+    const resultJsonStr = await Promise.race([execPromise, timeoutPromise]);
     const result = JSON.parse(resultJsonStr);
     return {
       stdout: result.stdout || "",

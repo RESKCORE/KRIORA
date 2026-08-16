@@ -1,5 +1,6 @@
 import express from 'express';
 import path from 'path';
+import crypto from 'crypto';
 import dotenv from 'dotenv';
 import { verifyToken, createClerkClient } from '@clerk/express';
 import { ConvexHttpClient } from 'convex/browser';
@@ -391,6 +392,31 @@ Always note that administrative publishing actions require explicit confirmation
     }
   });
 
+  // ─── Deterministic Assessment Evaluation Cache ──────────────────────────────
+  interface CachedEvaluation {
+    score: number;
+    maxScore: number;
+    percentage: number;
+    passedTests: number;
+    failedTests: number;
+    feedback: string;
+    evalResults: Array<{ input: string; expected: string; actual: string; pass: boolean }>;
+    graderMode: string;
+    graderVersion: string;
+    rubricVersion: string;
+    cachedAt: string;
+  }
+
+  const evaluationCache = new Map<string, { data: CachedEvaluation; expiresAt: number }>();
+  const MAX_CACHE_ENTRIES = 1000;
+  const CACHE_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
+
+  function computeEvaluationHash(dayNumber: number, maxScore: number, code: string, testCases: any): string {
+    const normalizedCode = code.replace(/\r\n/g, '\n').trim();
+    const rawKey = `${dayNumber}:${maxScore}:${normalizedCode}:${JSON.stringify(testCases || [])}`;
+    return crypto.createHash('sha256').update(rawKey).digest('hex');
+  }
+
   // ─── Student Assessment Evaluation (AI Marks & Feedback) ───────────────────
   app.post(['/api/lms/evaluate-test', '/lms/evaluate-test', '/evaluate-test'], createRateLimiter(20), async (req, res) => {
     try {
@@ -419,6 +445,21 @@ Always note that administrative publishing actions require explicit confirmation
 
       const sanitizedMaxScore = typeof maxScore === 'number' && maxScore > 0 ? Math.min(maxScore, 100) : 10;
       const evalTimestamp = new Date().toISOString();
+
+      // Deterministic semantic cache check
+      const cacheKey = computeEvaluationHash(sanitizedDayNumber, sanitizedMaxScore, code, testCases);
+      const cached = evaluationCache.get(cacheKey);
+      if (cached && cached.expiresAt > Date.now()) {
+        return res.json({
+          success: true,
+          ...cached.data,
+          maxScore: sanitizedMaxScore,
+          evalStatus: 'auto',
+          evalTimestamp,
+          submissionRequestId,
+          cached: true,
+        });
+      }
 
       const prompt = `You are an expert Python programming instructor and evaluator for Kriora LMS.
 Evaluate the student's Python code submission fairly, accurately, and thoroughly.
@@ -498,8 +539,7 @@ Return a valid JSON object ONLY:
             },
           ];
 
-      res.json({
-        success: true,
+      const evalPayload: CachedEvaluation = {
         score,
         maxScore: sanitizedMaxScore,
         percentage,
@@ -507,12 +547,25 @@ Return a valid JSON object ONLY:
         failedTests,
         feedback,
         evalResults,
-        evalStatus: 'auto',
         graderMode: 'ai-assisted',
         graderVersion: EVALUATOR_VERSION,
         rubricVersion: RUBRIC_VERSION,
+        cachedAt: evalTimestamp,
+      };
+
+      if (evaluationCache.size >= MAX_CACHE_ENTRIES) {
+        const oldestKey = evaluationCache.keys().next().value;
+        if (oldestKey) evaluationCache.delete(oldestKey);
+      }
+      evaluationCache.set(cacheKey, { data: evalPayload, expiresAt: Date.now() + CACHE_TTL_MS });
+
+      res.json({
+        success: true,
+        ...evalPayload,
+        evalStatus: 'auto',
         evalTimestamp,
         submissionRequestId,
+        cached: false,
       });
     } catch (err: any) {
       console.error('[Assessment Evaluation API Error]:', err?.message || 'Evaluation error');
