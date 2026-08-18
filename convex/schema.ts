@@ -182,8 +182,101 @@ export default defineSchema({
     action: v.string(),
     details: v.optional(v.string()),
     metadata: v.optional(v.any()),
-  }).index("by_custom_id", ["id"]),
+  })
+    .index("by_custom_id", ["id"])
+    .index("by_timestamp", ["timestamp"]),
 
   config: defineTable(v.any()),
+
+  // ── Practice Arena (V1) ───────────────────────────────────────────────────
+  practiceProblems: defineTable({
+    id: v.string(),
+    problemNumber: v.number(),
+    slug: v.string(),
+    title: v.string(),
+    difficulty: v.string(), // "Easy" | "Medium" | "Hard"
+    topic: v.string(),
+    topics: v.array(v.string()),
+    relatedDay: v.optional(v.number()),
+    relatedCurriculumTopic: v.optional(v.string()),
+    description: v.string(),
+    inputFormat: v.string(),
+    outputFormat: v.string(),
+    constraints: v.string(),
+    examples: v.array(
+      v.object({
+        input: v.string(),
+        output: v.string(),
+        explanation: v.optional(v.string()),
+      })
+    ),
+    starterCode: v.string(),
+    hints: v.array(v.string()),
+    publicTestCases: v.array(
+      v.object({
+        input: v.string(),
+        expectedOutput: v.string(),
+      })
+    ),
+    hiddenTestCases: v.optional(
+      v.array(
+        v.object({
+          input: v.string(),
+          expectedOutput: v.string(),
+        })
+      )
+    ),
+    solution: v.optional(
+      v.object({
+        approach: v.string(),
+        code: v.string(),
+        timeComplexity: v.string(),
+        spaceComplexity: v.string(),
+      })
+    ),
+    isPublished: v.boolean(),
+    createdAt: v.optional(v.string()),
+    updatedAt: v.optional(v.string()),
+  })
+    .index("by_custom_id", ["id"])
+    .index("by_number", ["problemNumber"])
+    .index("by_difficulty", ["difficulty"])
+    .index("by_topic", ["topic"])
+    .index("by_day", ["relatedDay"]),
+
+  practiceProgress: defineTable({
+    id: v.string(),
+    studentId: v.string(),
+    problemId: v.string(),
+    status: v.string(), // "Not Attempted" | "Attempted" | "Solved"
+    bookmarked: v.boolean(),
+    bestSubmissionId: v.optional(v.string()),
+    solvedAt: v.optional(v.string()),
+    firstAttemptedAt: v.string(),
+    lastAttemptedAt: v.string(),
+    attemptsCount: v.number(),
+  })
+    .index("by_student", ["studentId"])
+    .index("by_student_problem", ["studentId", "problemId"])
+    .index("by_custom_id", ["id"]),
+
+  practiceSubmissions: defineTable({
+    id: v.string(),
+    studentId: v.string(),
+    problemId: v.string(),
+    status: v.string(), // "Accepted" | "Wrong Answer" | "Runtime Error" | "Time Limit Exceeded"
+    code: v.string(),
+    passedTests: v.number(),
+    totalTests: v.number(),
+    runtimeMs: v.number(),
+    submittedAt: v.string(),
+    attemptNumber: v.number(),
+    submissionRequestId: v.optional(v.string()),
+  })
+    .index("by_student", ["studentId"])
+    .index("by_problem", ["problemId"])
+    .index("by_student_problem", ["studentId", "problemId"])
+    .index("by_request_id", ["submissionRequestId"])
+    .index("by_custom_id", ["id"]),
 });
 

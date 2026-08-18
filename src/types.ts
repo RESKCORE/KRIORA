@@ -235,3 +235,6 @@ export interface LMSConfig {
   finalExamThreshold?: number;
   testDurationMinutes?: number;
 }
+
+// --- Practice Arena (V1) ---
+export * from './lib/practice/types';

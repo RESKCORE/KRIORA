@@ -22,6 +22,10 @@ import PythonCompiler from "./PythonCompiler";
 import { runPythonWithStdin, normalizeOutput } from "../lib/pythonRunner";
 import { EVALUATOR_VERSION, RUBRIC_VERSION } from "../lib/constants";
 
+const PracticeArena = React.lazy(() =>
+  import("./practice/PracticeArena").then((m) => ({ default: m.PracticeArena }))
+);
+
 interface StudentPortalProps {
   actorEmail: string;
   student: Student;
@@ -36,7 +40,7 @@ interface StudentPortalProps {
   onRefreshState: () => void;
 }
 
-type TabId = "dashboard" | "course" | "player" | "announcements" | "notifications" | "settings";
+type TabId = "dashboard" | "course" | "practice" | "player" | "announcements" | "notifications" | "settings";
 type PlayerSubTab = "theory" | "worked_example" | "practice" | "assessment";
 
 // ── Reusable Code Block with Copy Button ──────────────────────────────────────
@@ -98,6 +102,7 @@ export default function StudentPortal({
   const [playerTab, setPlayerTab] = useState<PlayerSubTab>("theory");
   const [activeTab, setActiveTab] = useState<TabId>("dashboard");
   const [activeDayId, setActiveDayId] = useState<string | null>(null);
+  const [practiceInitialProblemId, setPracticeInitialProblemId] = useState<string | null>(null);
   const [expandedModules, setExpandedModules] = useState<Record<string, boolean>>({});
   const [expandedTopicId, setExpandedTopicId] = useState<string | null>(null);
   const [assessmentCode, setAssessmentCode] = useState("");
@@ -426,9 +431,10 @@ export default function StudentPortal({
     (a) => !seenAnnouncementIds.includes(a.id)
   ).length;
 
-  const navItems = [
+  const navItems: { id: TabId; label: string; icon: any; badge?: number | string }[] = [
     { id: "dashboard" as TabId, label: "Overview", icon: Layers },
     { id: "course" as TabId, label: "Syllabus", icon: BookOpen },
+    { id: "practice" as TabId, label: "Practice Arena", icon: Code },
     { id: "announcements" as TabId, label: "Announcements", icon: Bell, badge: unreadAnnouncementsCount },
     { id: "settings" as TabId, label: "Profile", icon: User },
   ];
@@ -517,7 +523,7 @@ export default function StudentPortal({
                   <Icon className={`w-4 h-4 ${isActive ? "text-[#FF5A36]" : "text-slate-500"}`} />
                   {!sidebarCollapsed && <span>{item.label}</span>}
                 </div>
-                {!sidebarCollapsed && item.badge !== undefined && item.badge > 0 && (
+                {!sidebarCollapsed && item.badge !== undefined && (typeof item.badge === "number" ? item.badge > 0 : Boolean(item.badge)) && (
                   <span className="px-2 py-0.5 text-[10px] font-bold rounded-full bg-orange-100 text-[#FF5A36]">
                     {item.badge}
                   </span>
@@ -548,7 +554,15 @@ export default function StudentPortal({
         <header className="h-16 bg-white/90 backdrop-blur-md border-b border-slate-200/80 px-6 flex items-center justify-between sticky top-0 z-20 shadow-2xs">
           <div className="flex items-center gap-3">
             <h2 className="font-extrabold text-sm text-slate-900 capitalize">
-              {activeTab === "dashboard" ? "Dashboard Overview" : activeTab === "course" ? "Course Syllabus" : activeTab === "player" ? `Day ${activeDay?.dayNumber || ""}: ${activeDay?.title || "Lesson Player"}` : activeTab}
+              {activeTab === "dashboard"
+                ? "Dashboard Overview"
+                : activeTab === "course"
+                ? "Course Syllabus"
+                : activeTab === "practice"
+                ? "Practice Arena"
+                : activeTab === "player"
+                ? `Day ${activeDay?.dayNumber || ""}: ${activeDay?.title || "Lesson Player"}`
+                : activeTab}
             </h2>
             {studentBatch && (
               <span className="inline-flex items-center gap-1.5 text-[11px] font-semibold text-emerald-700 bg-emerald-50 px-2.5 py-0.5 rounded-full border border-emerald-200/60">
@@ -592,21 +606,32 @@ export default function StudentPortal({
                     </p>
                   </div>
 
-                  {availableDays.length > 0 && (
+                  <div className="flex flex-col sm:flex-row items-center gap-2.5 shrink-0">
+                    {availableDays.length > 0 && (
+                      <Button
+                        onClick={() => {
+                          const targetDay = allDays.find(d => d.dayNumber === currentDay) || availableDays[0];
+                          if (targetDay) {
+                            setActiveDayId(targetDay.id);
+                            setActiveTab("player");
+                          }
+                        }}
+                        className="bg-[#FF5A36] hover:bg-orange-600 text-white font-black text-xs px-5 py-3 rounded-2xl shadow-lg shadow-orange-500/25 shrink-0 flex items-center gap-2 w-full sm:w-auto"
+                      >
+                        <Play className="w-4 h-4 fill-current" />
+                        <span>Resume Day {currentDay || 1} Lesson</span>
+                      </Button>
+                    )}
+
                     <Button
-                      onClick={() => {
-                        const targetDay = allDays.find(d => d.dayNumber === currentDay) || availableDays[0];
-                        if (targetDay) {
-                          setActiveDayId(targetDay.id);
-                          setActiveTab("player");
-                        }
-                      }}
-                      className="bg-[#FF5A36] hover:bg-orange-600 text-white font-black text-xs px-5 py-3 rounded-2xl shadow-lg shadow-orange-500/25 shrink-0 flex items-center gap-2"
+                      onClick={() => setActiveTab("practice")}
+                      variant="outline"
+                      className="border-slate-700 bg-slate-800/80 hover:bg-slate-700 text-white font-bold text-xs px-4 py-3 rounded-2xl shrink-0 flex items-center gap-2 w-full sm:w-auto"
                     >
-                      <Play className="w-4 h-4 fill-current" />
-                      <span>Resume Day {currentDay || 1} Lesson</span>
+                      <Code className="w-4 h-4 text-indigo-400" />
+                      <span>Practice Arena</span>
                     </Button>
-                  )}
+                  </div>
                 </div>
                 <div className="absolute right-0 top-0 -mt-8 -mr-8 w-64 h-64 bg-orange-500/10 rounded-full blur-3xl pointer-events-none" />
               </div>
@@ -807,6 +832,37 @@ export default function StudentPortal({
           )}
 
           {/* ═══════════════════════════════════════════════════════════════════
+              TAB: PRACTICE ARENA (100+ PROBLEMS WORKSPACE)
+          ═══════════════════════════════════════════════════════════════════ */}
+          {activeTab === "practice" && (
+            <div className="space-y-6">
+              <React.Suspense
+                fallback={
+                  <div className="py-24 text-center space-y-3">
+                    <RefreshCw className="w-8 h-8 text-indigo-500 animate-spin mx-auto" />
+                    <p className="text-xs text-slate-400 font-medium">Loading Python Practice Arena...</p>
+                  </div>
+                }
+              >
+                <PracticeArena
+                  studentEmail={student?.email || actorEmail}
+                  initialProblemId={practiceInitialProblemId}
+                  onNavigateToCurriculumDay={(dayNumber) => {
+                    const d = allDays.find((day) => day.dayNumber === dayNumber);
+                    if (d) {
+                      setActiveDayId(d.id);
+                      setActiveTab("player");
+                    } else {
+                      setActiveTab("course");
+                    }
+                  }}
+                  onClearInitialProblem={() => setPracticeInitialProblemId(null)}
+                />
+              </React.Suspense>
+            </div>
+          )}
+
+          {/* ═══════════════════════════════════════════════════════════════════
               TAB: LESSON PLAYER / READING PANE & WORKBENCH
           ═══════════════════════════════════════════════════════════════════ */}
           {activeTab === "player" && (
@@ -932,6 +988,16 @@ export default function StudentPortal({
                           <span className="w-2 h-2 rounded-full bg-emerald-400" />
                         </button>
                       )}
+
+                      <button
+                        onClick={() => {
+                          setActiveTab("practice");
+                        }}
+                        className="px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-2 shrink-0 bg-indigo-50 text-indigo-700 hover:bg-indigo-600 hover:text-white border border-indigo-200/60 ml-auto"
+                      >
+                        <Code className="w-3.5 h-3.5" />
+                        <span>Practice Arena</span>
+                      </button>
                     </div>
                   </Card>
 

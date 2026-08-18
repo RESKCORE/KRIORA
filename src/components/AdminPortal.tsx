@@ -6,7 +6,7 @@ import {
   Sparkles, Send, Brain, Monitor, AlertTriangle, BarChart2,
   UserPlus, GraduationCap, CheckCircle2, Zap, Megaphone,
   Activity, CheckSquare, Award, ArrowUpRight, ChevronDown,
-  Filter, MoreHorizontal
+  Filter, MoreHorizontal, Code
 } from "lucide-react";
 import { useQuery, useMutation, useAction } from "convex/react";
 import { useAuth, useUser } from "@clerk/clerk-react";
@@ -21,6 +21,10 @@ import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { Select } from "@/components/ui/select";
 import { Input } from "@/components/ui/input";
 import { StatCard, StatusPill, PageHeader, EmptyState } from "@/components/ui/admin-shared";
+import { PRACTICE_PROBLEMS_CATALOG } from "../lib/practice/catalog";
+
+const AdminPracticeArena = React.lazy(() => import("./admin/AdminPracticeArena"));
+
 import type {
   Course, Student, Announcement, AuditLog, LMSConfig,
   CourseDay, CourseModule, Topic, Batch, BatchDayAccess, TestSubmission
@@ -40,7 +44,7 @@ interface AdminPortalProps {
   onRefreshState: () => void;
 }
 
-type AdminTab = "dashboard" | "students" | "batches" | "assessments" | "marks" | "courses" | "content" | "analytics" | "tests" | "announcements" | "audit" | "copilot";
+type AdminTab = "dashboard" | "students" | "batches" | "assessments" | "practice" | "marks" | "courses" | "content" | "analytics" | "tests" | "announcements" | "audit" | "copilot";
 
 export default function AdminPortal({
   actorEmail, courses, students, announcements, auditLogs, config, batches, dayAccess, testSubmissions, onLogout, onRefreshState
@@ -87,6 +91,7 @@ export default function AdminPortal({
   const upsertAnnMut = useMutation(api.lms.upsertAnnouncement);
   const deleteAnnMut = useMutation(api.lms.deleteAnnouncement);
   const saveConfigMut = useMutation(api.lms.saveLMSConfig);
+  const seedPracticeProblemsMut = useMutation(api.lms.seedPracticeProblems);
 
   const withActorEmail = <T extends object>(mutate: (args: T) => Promise<any>) => {
     return (args: T) => mutate({ ...args, actorEmail } as T);
@@ -104,6 +109,7 @@ export default function AdminPortal({
   const runUpsertAnnMut = withActorEmail(upsertAnnMut);
   const runDeleteAnnMut = withActorEmail(deleteAnnMut);
   const runSaveConfigMut = withActorEmail(saveConfigMut);
+  const runSeedPracticeProblemsMut = withActorEmail(seedPracticeProblemsMut);
 
   // Derived Analytics Data directly from props
   const attendanceData: any[] = [];
@@ -560,18 +566,19 @@ export default function AdminPortal({
   };
 
   // Nav structure
-  const mainNavItems: { id: AdminTab; label: string; icon: any; badge?: number }[] = [
+  const mainNavItems: { id: AdminTab; label: string; icon: any; badge?: number | string }[] = [
     { id: "dashboard", label: "Dashboard", icon: Layers },
     { id: "students", label: "Students", icon: Users, badge: pendingStudents.length > 0 ? pendingStudents.length : undefined },
     { id: "batches", label: "Batches", icon: Layers },
     { id: "assessments", label: "Assessments", icon: CheckSquare, badge: validTestSubmissions.filter(s => s.evalStatus === "pending").length > 0 ? validTestSubmissions.filter(s => s.evalStatus === "pending").length : undefined },
+    { id: "practice", label: "Practice Arena", icon: Code },
     { id: "marks", label: "Daily Marks", icon: Award },
     { id: "courses", label: "Course Content", icon: BookOpen },
     { id: "content", label: "Content Release", icon: Zap },
     { id: "analytics", label: "Analytics", icon: BarChart2 },
   ];
 
-  const systemNavItems: { id: AdminTab; label: string; icon: any; badge?: number }[] = [
+  const systemNavItems: { id: AdminTab; label: string; icon: any; badge?: number | string }[] = [
     { id: "copilot", label: "AI Copilot", icon: Sparkles },
     { id: "tests", label: "Test Monitor", icon: Monitor },
     { id: "announcements", label: "Announcements", icon: Megaphone },
@@ -639,7 +646,7 @@ export default function AdminPortal({
                     {!sidebarCollapsed && <span>{it.label}</span>}
                   </div>
                   
-                  {!sidebarCollapsed && it.badge !== undefined && it.badge > 0 && (
+                  {!sidebarCollapsed && it.badge !== undefined && (typeof it.badge === "number" ? it.badge > 0 : Boolean(it.badge)) && (
                     <span className={`px-2 py-0.5 text-[10px] rounded-full font-mono font-bold ${ active ? "bg-[#FF5A36] text-white" : "bg-slate-100 text-slate-600 " }`}>
                       {it.badge.toLocaleString()}
                     </span>
@@ -671,7 +678,7 @@ export default function AdminPortal({
                     {!sidebarCollapsed && <span>{it.label}</span>}
                   </div>
 
-                  {!sidebarCollapsed && it.badge !== undefined && it.badge > 0 && (
+                  {!sidebarCollapsed && it.badge !== undefined && (typeof it.badge === "number" ? it.badge > 0 : Boolean(it.badge)) && (
                     <span className={`px-2 py-0.5 text-[10px] rounded-full font-mono font-bold ${ active ? "bg-[#FF5A36] text-white" : "bg-slate-100 text-slate-600 " }`}>
                       {it.badge}
                     </span>
@@ -1671,6 +1678,20 @@ export default function AdminPortal({
                 </div>
               </div>
             </div>
+          )}
+
+          {/* PRACTICE ARENA MANAGEMENT TAB */}
+          {activeTab === "practice" && (
+            <React.Suspense
+              fallback={
+                <div className="py-24 text-center space-y-3 bg-white rounded-2xl border border-slate-200">
+                  <RefreshCw className="w-8 h-8 text-[#FF5A36] animate-spin mx-auto" />
+                  <p className="text-xs text-slate-500 font-medium">Loading Practice Arena Management...</p>
+                </div>
+              }
+            >
+              <AdminPracticeArena actorEmail={actorEmail} />
+            </React.Suspense>
           )}
 
           {/* 5. COURSE CONTENT TAB (Stitch Image 5) */}

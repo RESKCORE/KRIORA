@@ -59,11 +59,13 @@ export function isServerAuthorized(serverSecret?: string) {
 export async function resolveAuthenticatedStudent(ctx: QueryCtx | MutationCtx, fallbackEmail?: string, serverSecret?: string) {
   const identity = await ctx.auth.getUserIdentity();
   const email = normalizeEmail(identity?.email || fallbackEmail);
-  if (!identity && !email) {
+  if (!identity && !email && !isServerAuthorized(serverSecret)) {
     throw new Error("Unauthenticated: Clerk session required");
   }
-  if (!identity && !isServerAuthorized(serverSecret)) {
-    throw new Error("Unauthenticated: Clerk session or CONVEX_SERVER_SECRET required");
+
+  // If a session identity is present, ensure caller cannot spoof a different student email
+  if (identity?.email && fallbackEmail && normalizeEmail(identity.email) !== normalizeEmail(fallbackEmail)) {
+    throw new Error("Forbidden: Session identity does not match supplied email argument");
   }
 
   if (identity?.subject) {
@@ -88,8 +90,11 @@ export async function resolveAuthenticatedStudent(ctx: QueryCtx | MutationCtx, f
 export async function findStudentByIdentity(ctx: QueryCtx, fallbackEmail?: string, serverSecret?: string) {
   const identity = await ctx.auth.getUserIdentity();
   const email = normalizeEmail(identity?.email || fallbackEmail);
-  if (!identity && !email) return null;
-  if (!identity && !isServerAuthorized(serverSecret)) return null;
+  if (!identity && !email && !isServerAuthorized(serverSecret)) return null;
+
+  if (identity?.email && fallbackEmail && normalizeEmail(identity.email) !== normalizeEmail(fallbackEmail)) {
+    return null;
+  }
 
   if (identity?.subject) {
     const student = await ctx.db
@@ -113,8 +118,11 @@ export async function findStudentByIdentity(ctx: QueryCtx, fallbackEmail?: strin
 export async function bindClerkIdentityToStudent(ctx: MutationCtx, fallbackEmail?: string, serverSecret?: string) {
   const identity = await ctx.auth.getUserIdentity();
   const email = normalizeEmail(identity?.email || fallbackEmail);
-  if ((!identity || !identity.subject) && !email) return null;
-  if (!identity && !isServerAuthorized(serverSecret)) return null;
+  if ((!identity || !identity.subject) && !email && !isServerAuthorized(serverSecret)) return null;
+
+  if (identity?.email && fallbackEmail && normalizeEmail(identity.email) !== normalizeEmail(fallbackEmail)) {
+    return null;
+  }
 
   const matches = await ctx.db
     .query("students")
@@ -136,11 +144,8 @@ export async function requireAdmin(ctx: QueryCtx | MutationCtx, fallbackEmail?: 
   const identity = await ctx.auth.getUserIdentity();
   const email = normalizeEmail(identity?.email || fallbackEmail);
   
-  if (!identity && !fallbackEmail) {
+  if (!identity && !fallbackEmail && !isServerAuthorized(serverSecret)) {
     throw new Error("Unauthenticated: Clerk admin session required");
-  }
-  if (!identity && !isServerAuthorized(serverSecret)) {
-    throw new Error("Unauthenticated: Clerk admin session or CONVEX_SERVER_SECRET required");
   }
 
   // If a session identity is present, ensure caller cannot spoof a different admin email
@@ -160,6 +165,8 @@ async function assertDayAccessible(
   student: { id: string; batchId?: string },
   dayId: string
 ) {
+  // Find the specific day by querying all days for this course and filtering by id
+  // (dayId is not indexed directly, but courseDays table is small and static)
   const days = await ctx.db
     .query("courseDays")
     .withIndex("by_course", (q) => q.eq("courseId", "python-mastery"))
@@ -1423,6 +1430,7 @@ export const adminCopilotChat = action({
         );
         const batches = adminData.batches || [];
         const submissions = adminData.testSubmissions || [];
+        const totalSubmissionCount = adminData.totalSubmissionCount || submissions.length;
         const announcements = adminData.announcements || [];
         const config = adminData.config || {};
 
@@ -1470,7 +1478,7 @@ ${
         .join("\n")
     : "    No announcements published yet."
 }
-- Assessment Submissions Total: ${submissions.length} assessments submitted (Average Score: ${avgScore}/10)
+- Assessment Submissions Total: ${totalSubmissionCount} assessments submitted (Average Score: ${avgScore}/10)
 - Configured Passing Thresholds: ${config.dailyPerfThreshold || 70}% (Daily Tasks), ${config.finalExamThreshold || 80}% (Final Exam)
 `;
       }
@@ -1657,6 +1665,590 @@ JSON schema:
       feedback: parsed.feedback || `Scored ${score}/${maxScore} (${percentage}%).`,
       evalResults: parsed.evalResults || [],
     };
+  },
+});
+
+// ─── PRACTICE ARENA QUERIES & MUTATIONS (V1) ────────────────────────────────
+
+export const getPracticeProblems = query({
+  args: { actorEmail: v.optional(v.string()) },
+  handler: async (ctx, _args) => {
+    const problems = await ctx.db
+      .query("practiceProblems")
+      .collect();
+
+    // Sort by problemNumber ascending
+    problems.sort((a, b) => a.problemNumber - b.problemNumber);
+
+    // Lightweight projection for list view — full content fetched by getPracticeProblemDetail
+    return problems.map((p) => ({
+      id: p.id,
+      problemNumber: p.problemNumber,
+      slug: p.slug,
+      title: p.title,
+      difficulty: p.difficulty,
+      topic: p.topic,
+      topics: p.topics,
+      relatedDay: p.relatedDay,
+      relatedCurriculumTopic: p.relatedCurriculumTopic,
+      isPublished: p.isPublished,
+      hasSolution: !!p.solution,
+      publicTestCaseCount: p.publicTestCases?.length ?? 0,
+      hiddenTestCaseCount: p.hiddenTestCases?.length ?? 0,
+    }));
+  },
+});
+
+export const getPracticeProblemById = query({
+  args: { problemId: v.string(), actorEmail: v.optional(v.string()) },
+  handler: async (ctx, args) => {
+    const problem = await ctx.db
+      .query("practiceProblems")
+      .withIndex("by_custom_id", (q) => q.eq("id", args.problemId))
+      .first();
+
+    if (!problem) return null;
+
+    // Full content returned only when a specific problem is opened
+    return {
+      id: problem.id,
+      problemNumber: problem.problemNumber,
+      slug: problem.slug,
+      title: problem.title,
+      difficulty: problem.difficulty,
+      topic: problem.topic,
+      topics: problem.topics,
+      relatedDay: problem.relatedDay,
+      relatedCurriculumTopic: problem.relatedCurriculumTopic,
+      description: problem.description,
+      inputFormat: problem.inputFormat,
+      outputFormat: problem.outputFormat,
+      constraints: problem.constraints,
+      examples: problem.examples,
+      starterCode: problem.starterCode,
+      hints: problem.hints,
+      publicTestCases: problem.publicTestCases,
+      hiddenTestCases: problem.hiddenTestCases,
+      isPublished: problem.isPublished,
+      hasSolution: !!problem.solution,
+    };
+  },
+});
+
+export const getStudentPracticeContext = query({
+  args: { actorEmail: v.optional(v.string()), serverSecret: v.optional(v.string()) },
+  handler: async (ctx, args) => {
+    const student = await findStudentByIdentity(ctx, args.actorEmail, args.serverSecret);
+    if (!student) {
+      return {
+        progressList: [],
+        progressMap: {},
+        bookmarkedIds: [],
+        stats: {
+          totalSolved: 0,
+          easySolved: 0,
+          mediumSolved: 0,
+          hardSolved: 0,
+          totalAttempts: 0,
+          successRate: 0,
+          currentStreak: 0,
+        },
+        activityHistory: [],
+      };
+    }
+
+    const [progressRecords, studentSubmissions] = await Promise.all([
+      ctx.db
+        .query("practiceProgress")
+        .withIndex("by_student", (q) => q.eq("studentId", student.id))
+        .collect(),
+      ctx.db
+        .query("practiceSubmissions")
+        .withIndex("by_student", (q) => q.eq("studentId", student.id))
+        .collect(),
+    ]);
+
+    // Fetch difficulty only for problems this student has progress on — not all 102
+    const problemIds = [...new Set(progressRecords.map((pr) => pr.problemId))];
+    const difficultyPromises = problemIds.map((pid) =>
+      ctx.db.query("practiceProblems").withIndex("by_custom_id", (q) => q.eq("id", pid)).first()
+    );
+    const problemDocs = await Promise.all(difficultyPromises);
+    const problemDifficultyMap = new Map(
+      problemDocs.filter(Boolean).map((p) => [p!.id, p!.difficulty])
+    );
+
+    const totalSubmissionsCount = studentSubmissions.length;
+    const acceptedSubmissionsCount = studentSubmissions.filter((s) => s.status === "Accepted").length;
+
+    // Build lightweight progressMap without full submission objects
+    const progressMap: Record<string, any> = {};
+    const bookmarkedIds: string[] = [];
+    let totalSolved = 0;
+    let easySolved = 0;
+    let mediumSolved = 0;
+    let hardSolved = 0;
+    let totalAttempts = 0;
+
+    for (const pr of progressRecords) {
+      progressMap[pr.problemId] = {
+        status: pr.status,
+        bookmarked: pr.bookmarked,
+        solvedAt: pr.solvedAt,
+        attemptsCount: pr.attemptsCount,
+        lastAttemptedAt: pr.lastAttemptedAt,
+      };
+      if (pr.bookmarked) {
+        bookmarkedIds.push(pr.problemId);
+      }
+      if (pr.status === "Solved") {
+        totalSolved++;
+        const diff = problemDifficultyMap.get(pr.problemId);
+        if (diff === "Easy") easySolved++;
+        else if (diff === "Medium") mediumSolved++;
+        else if (diff === "Hard") hardSolved++;
+      }
+      totalAttempts += pr.attemptsCount || 0;
+    }
+
+    const successRate =
+      totalSubmissionsCount > 0
+        ? Math.round((acceptedSubmissionsCount / totalSubmissionsCount) * 1000) / 10
+        : 0;
+
+    // Compute activity from immutable submissions history (submittedAt timestamps)
+    const dateCounts = new Map<string, number>();
+    for (const sub of studentSubmissions) {
+      if (sub.submittedAt) {
+        const dateStr = sub.submittedAt.slice(0, 10);
+        dateCounts.set(dateStr, (dateCounts.get(dateStr) || 0) + 1);
+      }
+    }
+
+    const activityHistory = Array.from(dateCounts.entries()).map(([date, count]) => ({
+      date,
+      count,
+    }));
+
+    // Calculate real practice streak
+    const activeDates = Array.from(dateCounts.keys()).sort().reverse();
+    let currentStreak = 0;
+    if (activeDates.length > 0) {
+      const now = new Date();
+      const todayStr = now.toISOString().slice(0, 10);
+      const yesterday = new Date(now.getTime() - 24 * 60 * 60 * 1000);
+      const yesterdayStr = yesterday.toISOString().slice(0, 10);
+
+      let checkDate = activeDates[0] === todayStr ? now : (activeDates[0] === yesterdayStr ? yesterday : null);
+
+      if (checkDate) {
+        let expectedDate = new Date(checkDate);
+        for (const dateStr of activeDates) {
+          const expStr = expectedDate.toISOString().slice(0, 10);
+          if (dateStr === expStr) {
+            currentStreak++;
+            expectedDate.setDate(expectedDate.getDate() - 1);
+          } else if (dateStr < expStr) {
+            break;
+          }
+        }
+      }
+    }
+
+    return {
+      progressList: progressRecords,
+      progressMap,
+      bookmarkedIds,
+      stats: {
+        totalSolved,
+        easySolved,
+        mediumSolved,
+        hardSolved,
+        totalAttempts,
+        successRate,
+        currentStreak,
+      },
+      activityHistory,
+    };
+  },
+});
+
+export const getPracticeSubmissions = query({
+  args: { problemId: v.string(), actorEmail: v.optional(v.string()) },
+  handler: async (ctx, args) => {
+    const student = await findStudentByIdentity(ctx, args.actorEmail);
+    if (!student) return [];
+
+    const subs = await ctx.db
+      .query("practiceSubmissions")
+      .withIndex("by_student_problem", (q) =>
+        q.eq("studentId", student.id).eq("problemId", args.problemId)
+      )
+      .collect();
+
+    // Sort descending by submittedAt
+    subs.sort((a, b) => (b.submittedAt > a.submittedAt ? 1 : -1));
+    return subs;
+  },
+});
+
+export const getOfficialSolution = query({
+  args: { problemId: v.string(), actorEmail: v.optional(v.string()) },
+  handler: async (ctx, args) => {
+    const student = await findStudentByIdentity(ctx, args.actorEmail);
+    const problem = await ctx.db
+      .query("practiceProblems")
+      .withIndex("by_custom_id", (q) => q.eq("id", args.problemId))
+      .first();
+
+    if (!problem || !problem.solution) return null;
+
+    // Check if student has solved it or is admin
+    let isSolved = false;
+    if (student) {
+      const prog = await ctx.db
+        .query("practiceProgress")
+        .withIndex("by_student_problem", (q) =>
+          q.eq("studentId", student.id).eq("problemId", args.problemId)
+        )
+        .first();
+      isSolved = prog?.status === "Solved";
+    }
+
+    const identity = await ctx.auth.getUserIdentity();
+    const isAdmin = isAdminEmail(identity?.email || args.actorEmail);
+
+    return {
+      solution: problem.solution,
+      isUnlocked: isSolved || isAdmin,
+    };
+  },
+});
+
+export const recordPracticeSubmission = mutation({
+  args: {
+    actorEmail: v.optional(v.string()),
+    problemId: v.string(),
+    status: v.string(), // "Accepted" | "Wrong Answer" | "Runtime Error" | "Time Limit Exceeded"
+    code: v.string(),
+    passedTests: v.number(),
+    totalTests: v.number(),
+    runtimeMs: v.number(),
+    submissionRequestId: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const identity = await ctx.auth.getUserIdentity();
+    const email = normalizeEmail(identity?.email || args.actorEmail);
+    const ts = new Date().toISOString();
+
+    let student: any = null;
+    if (email) {
+      student = await findStudentByIdentity(ctx, email);
+    }
+
+    if (!student) {
+      const emailToUse = email || (identity?.subject ? `${identity.subject}@kriora.internal` : "student@kriora.internal");
+      const newStudentId = "st_" + Date.now() + "_" + Math.random().toString(36).substring(2, 6);
+      const studentDoc = {
+        id: newStudentId,
+        fullName: identity?.name || (isAdminEmail(emailToUse) ? "Santosh Reddy (Admin)" : emailToUse.split("@")[0]),
+        email: emailToUse,
+        phone: "",
+        collegeName: "Kriora Academy",
+        branch: "Computer Science",
+        currentYear: "2026",
+        graduationYear: "2026",
+        status: "Approved",
+        enrolledCourses: ["python-mastery"],
+        registeredAt: ts,
+        lastActive: ts,
+        clerkUserId: identity?.subject,
+      };
+      const _id = await ctx.db.insert("students", studentDoc);
+      student = { ...studentDoc, _id };
+    }
+
+    // Idempotency check on submissionRequestId
+    if (args.submissionRequestId) {
+      const existingReq = await ctx.db
+        .query("practiceSubmissions")
+        .withIndex("by_request_id", (q) =>
+          q.eq("submissionRequestId", args.submissionRequestId!)
+        )
+        .first();
+
+      if (existingReq && existingReq.studentId === student.id) {
+        return {
+          success: true,
+          submissionId: existingReq.id,
+          status: existingReq.status,
+          idempotent: true,
+        };
+      }
+    }
+
+    // Get current progress record
+    const existingProgress = await ctx.db
+      .query("practiceProgress")
+      .withIndex("by_student_problem", (q) =>
+        q.eq("studentId", student.id).eq("problemId", args.problemId)
+      )
+      .first();
+
+    const attemptNumber = (existingProgress?.attemptsCount || 0) + 1;
+    const subId = "pr_sub_" + Date.now() + "_" + Math.random().toString(36).substring(2, 6);
+
+    await ctx.db.insert("practiceSubmissions", {
+      id: subId,
+      studentId: student.id,
+      problemId: args.problemId,
+      status: args.status,
+      code: args.code,
+      passedTests: args.passedTests,
+      totalTests: args.totalTests,
+      runtimeMs: args.runtimeMs,
+      submittedAt: ts,
+      attemptNumber,
+      submissionRequestId: args.submissionRequestId,
+    });
+
+    const isAccepted = args.status === "Accepted";
+    const newStatus = isAccepted
+      ? "Solved"
+      : existingProgress?.status === "Solved"
+      ? "Solved"
+      : "Attempted";
+
+    if (existingProgress) {
+      await ctx.db.patch(existingProgress._id, {
+        status: newStatus,
+        attemptsCount: attemptNumber,
+        lastAttemptedAt: ts,
+        ...(isAccepted && !existingProgress.solvedAt ? { solvedAt: ts } : {}),
+        ...(isAccepted ? { bestSubmissionId: subId } : {}),
+      });
+    } else {
+      await ctx.db.insert("practiceProgress", {
+        id: "pr_prog_" + Date.now(),
+        studentId: student.id,
+        problemId: args.problemId,
+        status: newStatus,
+        bookmarked: false,
+        bestSubmissionId: isAccepted ? subId : undefined,
+        solvedAt: isAccepted ? ts : undefined,
+        firstAttemptedAt: ts,
+        lastAttemptedAt: ts,
+        attemptsCount: 1,
+      });
+    }
+
+    // Update student lastActive timestamp
+    await ctx.db.patch(student._id, {
+      lastActive: ts,
+    });
+
+    return {
+      success: true,
+      submissionId: subId,
+      status: args.status,
+      attemptNumber,
+    };
+  },
+});
+
+export const toggleBookmarkProblem = mutation({
+  args: {
+    actorEmail: v.optional(v.string()),
+    problemId: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const identity = await ctx.auth.getUserIdentity();
+    const email = normalizeEmail(identity?.email || args.actorEmail);
+    const ts = new Date().toISOString();
+
+    let student: any = null;
+    if (email) {
+      student = await findStudentByIdentity(ctx, email);
+    }
+
+    if (!student) {
+      const emailToUse = email || (identity?.subject ? `${identity.subject}@kriora.internal` : "student@kriora.internal");
+      const newStudentId = "st_" + Date.now() + "_" + Math.random().toString(36).substring(2, 6);
+      const studentDoc = {
+        id: newStudentId,
+        fullName: identity?.name || (isAdminEmail(emailToUse) ? "Santosh Reddy (Admin)" : emailToUse.split("@")[0]),
+        email: emailToUse,
+        phone: "",
+        collegeName: "Kriora Academy",
+        branch: "Computer Science",
+        currentYear: "2026",
+        graduationYear: "2026",
+        status: "Approved",
+        enrolledCourses: ["python-mastery"],
+        registeredAt: ts,
+        lastActive: ts,
+        clerkUserId: identity?.subject,
+      };
+      const _id = await ctx.db.insert("students", studentDoc);
+      student = { ...studentDoc, _id };
+    }
+
+    const existing = await ctx.db
+      .query("practiceProgress")
+      .withIndex("by_student_problem", (q) =>
+        q.eq("studentId", student.id).eq("problemId", args.problemId)
+      )
+      .first();
+
+    if (existing) {
+      const newBookmarked = !existing.bookmarked;
+      await ctx.db.patch(existing._id, {
+        bookmarked: newBookmarked,
+        lastAttemptedAt: ts,
+      });
+      return { success: true, bookmarked: newBookmarked };
+    } else {
+      await ctx.db.insert("practiceProgress", {
+        id: "pr_prog_" + Date.now(),
+        studentId: student.id,
+        problemId: args.problemId,
+        status: "Not Attempted",
+        bookmarked: true,
+        firstAttemptedAt: ts,
+        lastAttemptedAt: ts,
+        attemptsCount: 0,
+      });
+      return { success: true, bookmarked: true };
+    }
+  },
+});
+
+export const seedPracticeProblems = mutation({
+  args: {
+    actorEmail: v.optional(v.string()),
+    serverSecret: v.optional(v.string()),
+    problems: v.array(v.any()),
+  },
+  handler: async (ctx, args) => {
+    await requireAdmin(ctx, args.actorEmail, args.serverSecret);
+
+    let inserted = 0;
+    let updated = 0;
+    const ts = new Date().toISOString();
+
+    for (const p of args.problems) {
+      if (!p.id || !p.title || !p.problemNumber) continue;
+
+      const existing = await ctx.db
+        .query("practiceProblems")
+        .withIndex("by_custom_id", (q) => q.eq("id", p.id))
+        .first();
+
+      const doc = {
+        id: p.id,
+        problemNumber: p.problemNumber,
+        slug: p.slug || p.id,
+        title: p.title,
+        difficulty: p.difficulty || "Easy",
+        topic: p.topic || "Basics",
+        topics: p.topics || [p.topic || "Basics"],
+        relatedDay: p.relatedDay,
+        relatedCurriculumTopic: p.relatedCurriculumTopic,
+        description: p.description || "",
+        inputFormat: p.inputFormat || "",
+        outputFormat: p.outputFormat || "",
+        constraints: p.constraints || "",
+        examples: p.examples || [],
+        starterCode: p.starterCode || "",
+        hints: p.hints || [],
+        publicTestCases: p.publicTestCases || [],
+        hiddenTestCases: p.hiddenTestCases || [],
+        solution: p.solution || undefined,
+        isPublished: p.isPublished !== false,
+        updatedAt: ts,
+      };
+
+      if (existing) {
+        await ctx.db.patch(existing._id, doc);
+        updated++;
+      } else {
+        await ctx.db.insert("practiceProblems", {
+          ...doc,
+          createdAt: ts,
+        });
+        inserted++;
+      }
+    }
+
+    await ctx.db.insert("auditLogs", {
+      id: "log-" + Date.now(),
+      timestamp: ts,
+      userId: "admin-core",
+      userName: "Director Admin",
+      userEmail: getAuditEmail(args.actorEmail),
+      role: "Admin",
+      action: "Practice Problems Seeded",
+      details: `Seeded Practice Problems catalog: ${inserted} inserted, ${updated} updated`,
+    });
+
+    return { success: true, inserted, updated, total: args.problems.length };
+  },
+});
+
+export const getAdminPracticeOverview = query({
+  args: { actorEmail: v.optional(v.string()) },
+  handler: async (ctx, args) => {
+    await requireAdmin(ctx, args.actorEmail);
+
+    const [submissions, progressRecords, students] = await Promise.all([
+      ctx.db.query("practiceSubmissions").order("desc").take(250),
+      ctx.db.query("practiceProgress").collect(),
+      ctx.db.query("students").collect(),
+    ]);
+
+    const solvedCount = progressRecords.filter((p) => p.status === "Solved").length;
+
+    const studentMap = new Map<string, { fullName: string; email: string; batchId?: string }>();
+    students.forEach((s) => {
+      studentMap.set(s.id, { fullName: s.fullName, email: s.email, batchId: s.batchId });
+      studentMap.set(s.email, { fullName: s.fullName, email: s.email, batchId: s.batchId });
+    });
+
+    const enrichedSubmissions = submissions.map((sub) => {
+      const student = studentMap.get(sub.studentId);
+      return {
+        id: sub.id,
+        studentId: sub.studentId,
+        problemId: sub.problemId,
+        status: sub.status,
+        passedTests: sub.passedTests,
+        totalTests: sub.totalTests,
+        runtimeMs: sub.runtimeMs,
+        submittedAt: sub.submittedAt,
+        attemptNumber: sub.attemptNumber,
+        studentName: student?.fullName || sub.studentId,
+        studentEmail: student?.email || "",
+        studentBatchId: student?.batchId || "Unassigned",
+      };
+    });
+
+    return {
+      submissions: enrichedSubmissions,
+      progressCount: progressRecords.length,
+      solvedCount,
+    };
+  },
+});
+
+export const getAdminSubmissionCode = query({
+  args: { submissionId: v.string(), actorEmail: v.optional(v.string()) },
+  handler: async (ctx, args) => {
+    await requireAdmin(ctx, args.actorEmail);
+    const sub = await ctx.db
+      .query("practiceSubmissions")
+      .withIndex("by_custom_id", (q) => q.eq("id", args.submissionId))
+      .first();
+    return sub ? sub.code : null;
   },
 });
 
