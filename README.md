@@ -29,6 +29,14 @@
 - **White-Themed Marketing Landing Page**: Public-facing white-themed landing (`LandingPage.tsx`) with animated orange gradient auras, 4-phase curriculum roadmap preview, WASM sandbox demo, and a seamless Clerk **Sign In / Sign Up modal** — rendered instantly for unauthenticated visitors (no loading spinner before auth).
 - **White-Themed Modern Portal**: Clean, distraction-free UI with collapsible navigation sidebar (`w-64` / `w-20` icon-only mode) and Clerk profile sync.
 - **Interactive 40-Day Curriculum Roadmap**: Real-time day-by-day progression tracker with visual state indicators (Completed, In-Progress, Locked, Scored).
+- **LeetCode-Inspired Python Practice Arena**:
+  - **102 Original Python Problems**: Categorized across 14 curriculum topics (Basics, Variables, I/O, Conditionals, Loops, Strings, Lists, Tuples/Sets, Dictionaries, Functions, Recursion, Searching/Sorting, Algorithms).
+  - **Difficulty Tiers**: Balanced across Easy (27), Medium (46), and Hard (29).
+  - **Browser-Side Pyodide WASM Engine**: Instant local execution for code and public test cases with zero server compute load and 6.0s timeout watchdog protection.
+  - **Public & Hidden Test Suites**: Immediate feedback on public tests, with hidden test verification on submission.
+  - **Practice Activity Heatmap & Streaks**: Continuous activity heatmap derived from immutable submission timestamps, calculating daily streaks and problem solve counts.
+  - **Problem Bookmarking & Filter Search**: Multi-dimensional filtering by topic, difficulty, status (Solved, Attempted, Not Attempted), and custom bookmarks.
+  - **On-Demand Hints & Solutions**: Multi-tier hints and full algorithmic approaches with time/space complexity analysis unlocked on solve.
 - **Sub-Tabbed Lesson Player**:
   - 📖 **Lesson Notes & Theory**: Step-by-step topic reader, learning objectives banner, structured markdown explanations, and one-click code copy tools.
   - ⚡ **Worked Case Studies**: Domain scenario modeling, Entity/Data/Operation architecture tags, algorithmic breakdowns, pseudocode, and executable Python demonstrations.
@@ -55,12 +63,16 @@
 - **Live Cohort & Batch Scheduling**:
   - Create and manage multi-cohort schedules with start/end dates, timing, and capacity.
   - **Day-by-Day Release Controls**: Lock or unlock specific curriculum days for entire cohorts or individual catch-up students.
+- **Admin Practice Arena Management Console**:
+  - **Live Submissions Monitor**: Real-time WebSocket stream of student practice attempts, runtime performance, and test results.
+  - **On-Demand Student Code Inspector**: Modal inspector to inspect student Python code on demand with syntax highlighting and copy tools.
+  - **Questions Catalog Inspector**: Search and review all 102 curriculum problems, test cases, and reference solutions.
 - **Real Analytics Engine**:
   - Real-time aggregated statistics calculated from Convex database records (Total Students, Active Batches, Daily Quiz Averages, Evaluation Queue).
   - Multi-dimensional filtering across cohorts, dates, and score distributions.
 - **Day-to-Day Marks Matrix & Submission Log**:
   - Full audit log of every student submission with input/output diffs, scores, and timestamps.
-  - 15+ Day progression matrix table for cross-cohort comparison.
+  - Complete 40-Day progression matrix table for cross-cohort comparison.
 - **Real-Time Proctoring & Security Monitor**:
   - Active telemetry tracking tab switches, window blurs, and proctoring warnings during timed evaluations.
 - **Autonomous AI Copilot**:
