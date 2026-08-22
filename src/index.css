@@ -84,3 +84,31 @@
   animation: pulseGlow 4s ease-in-out infinite;
 }
 
+/* ─── Clerk Authentication Widget Polish ───────────────────────────────────── */
+.cl-footer,
+.cl-footerAction,
+.cl-footerActionText,
+.cl-footerActionLink,
+.cl-footerPages,
+.cl-footerPagesLink,
+.cl-cardFooter,
+.cl-headerTitle,
+.cl-headerSubtitle {
+  display: none !important;
+}
+
+.cl-card,
+.cl-cardBox,
+.cl-rootBox {
+  box-shadow: none !important;
+  border: none !important;
+  background: transparent !important;
+  width: 100% !important;
+  max-width: 100% !important;
+}
+
+.cl-internal-b3fm6y,
+.cl-internal-185gdzj {
+  display: none !important;
+}
+

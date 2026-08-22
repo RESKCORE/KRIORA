@@ -453,7 +453,16 @@ export const getCourseMetadata = query({
           );
           const accessible = released || granted;
           if (!student || !accessible) {
-            return { ...d, topics: [] };
+            // Strip full lesson content/theory if locked, but preserve topic outlines so syllabus counts & progress are accurate
+            const sanitizedTopics = Array.isArray(d.topics)
+              ? d.topics.map((t: any) => ({
+                  id: t.id,
+                  title: t.title,
+                  order: t.order,
+                  dayId: t.dayId,
+                }))
+              : [];
+            return { ...d, topics: sanitizedTopics };
           }
           return d;
         });
@@ -482,7 +491,17 @@ export const getCourseMetadata = query({
       const shellModules = rawModules.map((m: any) => ({
         ...m,
         days: Array.isArray(m.days)
-          ? m.days.map((d: any) => ({ ...d, topics: [] }))
+          ? m.days.map((d: any) => ({
+              ...d,
+              topics: Array.isArray(d.topics)
+                ? d.topics.map((t: any) => ({
+                    id: t.id,
+                    title: t.title,
+                    order: t.order,
+                    dayId: t.dayId,
+                  }))
+                : [],
+            }))
           : [],
       }));
       return {

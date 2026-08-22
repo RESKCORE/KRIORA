@@ -390,9 +390,17 @@ export default function StudentPortal({
 
   // ── Real Live Student Analytics & Progress Calculations ──────────────────
   const completedTopicIds = student.completedLessons || [];
-  const totalTopics = allDays.flatMap((d) => d.topics).length;
+  const totalTopics = allDays.flatMap((d) => d.topics || []).length;
   const completedTopics = completedTopicIds.length;
-  const realProgressPct = totalTopics > 0
+
+  // Unlocked / Released cohort topic metrics
+  const releasedTopicsCount = availableDays.flatMap((d) => d.topics || []).length;
+  const releasedProgressPct = releasedTopicsCount > 0
+    ? Math.min(100, Math.round((completedTopics / releasedTopicsCount) * 100))
+    : 0;
+
+  // Full course curriculum progress
+  const courseProgressPct = totalTopics > 0
     ? Math.min(100, Math.round((completedTopics / totalTopics) * 100))
     : (student.progress?.[course?.id || ""] || 0);
 
@@ -575,10 +583,12 @@ export default function StudentPortal({
           <div className="flex items-center gap-4">
             <div className="text-right">
               <span className="text-[10px] text-slate-400 font-mono block uppercase tracking-wider">Course Progress</span>
-              <span className="text-xs font-extrabold text-[#FF5A36]">{realProgressPct}% Completed</span>
+              <span className="text-xs font-extrabold text-[#FF5A36]">
+                {courseProgressPct}% Completed <span className="text-slate-400 font-medium font-mono text-[11px]">({releasedProgressPct}% Cohort)</span>
+              </span>
             </div>
-            <div className="w-28 bg-slate-100 h-2.5 rounded-full overflow-hidden border border-slate-200/60">
-              <div className="bg-gradient-to-r from-[#FF5A36] to-orange-500 h-full rounded-full transition-all duration-500" style={{ width: `${realProgressPct}%` }} />
+            <div className="w-28 bg-slate-100 h-2.5 rounded-full overflow-hidden border border-slate-200/60" title={`Completed ${completedTopics} of ${totalTopics} curriculum topics (${releasedProgressPct}% of unlocked cohort sessions)`}>
+              <div className="bg-gradient-to-r from-[#FF5A36] to-orange-500 h-full rounded-full transition-all duration-500" style={{ width: `${Math.max(courseProgressPct > 0 ? 3 : 0, courseProgressPct)}%` }} />
             </div>
           </div>
         </header>
@@ -639,17 +649,17 @@ export default function StudentPortal({
               {/* 4 Real Stat Overview Cards */}
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
                 <StatCard
-                  title="Completed Topics"
+                  title="Curriculum Progress"
                   value={`${completedTopics} / ${totalTopics}`}
-                  subtitle={`${realProgressPct}% Course Finished`}
-                  trend={realProgressPct > 0 ? "Active" : undefined}
+                  subtitle={`100% of unlocked cohort (${completedTopics}/${releasedTopicsCount}) • ${courseProgressPct}% full course`}
+                  trend={courseProgressPct > 0 ? `${courseProgressPct}%` : undefined}
                   trendType="neutral"
                   icon={BookOpen}
                 />
                 <StatCard
                   title="Daily Assessments"
-                  value={`${gradedDaily.length} Graded`}
-                  subtitle={pendingManualCount > 0 ? `${pendingManualCount} pending review` : `${dailySubmissions.length} total submitted`}
+                  value={`${gradedDaily.length} / ${totalDays} Graded`}
+                  subtitle={pendingManualCount > 0 ? `${pendingManualCount} pending review` : `${dailySubmissions.length} of ${availableDays.length} unlocked submitted`}
                   icon={CheckSquare}
                 />
                 <StatCard
@@ -1705,15 +1715,15 @@ export default function StudentPortal({
                       <div className="p-4 bg-white/90 rounded-2xl border border-slate-200/80 space-y-1.5 shadow-2xs">
                         <div className="flex items-center justify-between">
                           <span className="text-[11px] font-bold text-slate-700">3. Syllabus Curriculum</span>
-                          <Badge variant={realProgressPct >= 80 ? "success" : "outline"} className="text-[9px]">
-                            {realProgressPct}% Finished
+                          <Badge variant={courseProgressPct >= 80 ? "success" : "outline"} className="text-[9px]">
+                            {courseProgressPct}% Finished
                           </Badge>
                         </div>
                         <p className="text-base font-black text-slate-900">
                           {completedTopics} / {totalTopics} Topics Completed
                         </p>
                         <span className="text-[10px] font-mono text-slate-400 block">
-                          Across {allDays.length} course days
+                          {completedTopics} / {releasedTopicsCount} released ({releasedProgressPct}%) • Across {allDays.length} course days
                         </span>
                       </div>
 

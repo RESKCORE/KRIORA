@@ -229,8 +229,13 @@ Your RESTRICTIONS:
     }
   };
 
-  // --- GATE 0: NOT SIGNED IN → RENDER LANDING PAGE IMMEDIATELY (NO LOADING SPINNER) ---
-  if (!isAuthReady || !isSignedIn) {
+  // --- AUTH INITIALIZATION GATE: WHILE CLERK IS DETERMINING AUTH STATUS (PREVENTS OAUTH REDIRECT FLASH) ---
+  if (!isAuthReady) {
+    return <PortalLoading />;
+  }
+
+  // --- GATE 0: CONFIRMED NOT SIGNED IN → RENDER LANDING PAGE ---
+  if (!isSignedIn) {
     return <LandingPage />;
   }
 

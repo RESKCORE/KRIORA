@@ -447,7 +447,7 @@ print(f"🚀 Status: {result['status']} | Grade: {result['percentage']}")`;
       {/* ─── Seamless Auth Modal Dialog ───────────────────────────────────────── */}
       {authModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/60 backdrop-blur-md animate-in fade-in duration-200">
-          <div className="relative w-full max-w-md bg-white rounded-3xl shadow-2xl border border-slate-200 overflow-hidden flex flex-col animate-in zoom-in-95 duration-200">
+          <div className="relative w-full max-w-[440px] bg-white rounded-3xl shadow-2xl border border-slate-200 overflow-hidden flex flex-col animate-in zoom-in-95 duration-200">
             {/* Modal Close Header */}
             <div className="flex items-center justify-between px-6 py-4 border-b border-slate-100 bg-slate-50/70">
               <div className="flex items-center gap-2">
@@ -463,12 +463,86 @@ print(f"🚀 Status: {result['status']} | Grade: {result['percentage']}")`;
               </button>
             </div>
 
+            {/* Separated Sign In vs Sign Up Tabs */}
+            <div className="flex border-b border-slate-100 bg-slate-50/80 p-1.5 gap-1.5">
+              <button
+                onClick={() => setAuthModal('signin')}
+                className={`flex-1 py-2 px-3 text-xs font-bold rounded-xl transition-all flex items-center justify-center gap-2 cursor-pointer ${
+                  authModal === 'signin'
+                    ? 'bg-white text-slate-900 shadow-sm border border-slate-200/80 font-extrabold'
+                    : 'text-slate-500 hover:text-slate-800 hover:bg-slate-100/60'
+                }`}
+              >
+                <span>Sign In</span>
+              </button>
+              <button
+                onClick={() => setAuthModal('signup')}
+                className={`flex-1 py-2 px-3 text-xs font-bold rounded-xl transition-all flex items-center justify-center gap-2 cursor-pointer ${
+                  authModal === 'signup'
+                    ? 'bg-white text-[#FF5A36] shadow-sm border border-slate-200/80 font-extrabold'
+                    : 'text-slate-500 hover:text-slate-800 hover:bg-slate-100/60'
+                }`}
+              >
+                <span>Create Account (Sign Up)</span>
+              </button>
+            </div>
+
             {/* Clerk Sign In / Sign Up Widget */}
-            <div className="p-4 sm:p-6 overflow-y-auto max-h-[80vh] flex flex-col items-center">
+            <div className="p-4 sm:p-6 overflow-y-auto overflow-x-hidden max-h-[75vh] flex flex-col items-center w-full">
               {authModal === 'signup' ? (
-                <SignUp routing="hash" signInUrl="#" afterSignUpUrl="/" />
+                <SignUp
+                  routing="virtual"
+                  fallbackRedirectUrl="/"
+                  forceRedirectUrl="/"
+                  appearance={{
+                    elements: {
+                      card: 'shadow-none border-none p-0 bg-transparent w-full',
+                      rootBox: 'w-full flex justify-center',
+                      cardBox: 'w-full shadow-none border-none',
+                      footer: 'hidden',
+                      footerAction: 'hidden',
+                      footerActionText: 'hidden',
+                      footerActionLink: 'hidden',
+                      footerPages: 'hidden',
+                      headerTitle: 'hidden',
+                      headerSubtitle: 'hidden',
+                      socialButtonsBlockButton: 'rounded-xl border border-slate-200 hover:bg-slate-50 text-xs font-bold text-slate-700 h-10',
+                      formButtonPrimary: 'bg-[#FF5A36] hover:bg-orange-600 text-white font-bold text-xs rounded-xl shadow-md h-10 transition-all',
+                      formFieldInput: 'rounded-xl border-slate-200 text-xs focus:ring-[#FF5A36] focus:border-[#FF5A36] h-10',
+                    },
+                    layout: {
+                      socialButtonsPlacement: 'top',
+                      showOptionalFields: false,
+                    },
+                  }}
+                />
               ) : (
-                <SignIn routing="hash" signUpUrl="#" afterSignInUrl="/" />
+                <SignIn
+                  routing="virtual"
+                  fallbackRedirectUrl="/"
+                  forceRedirectUrl="/"
+                  appearance={{
+                    elements: {
+                      card: 'shadow-none border-none p-0 bg-transparent w-full',
+                      rootBox: 'w-full flex justify-center',
+                      cardBox: 'w-full shadow-none border-none',
+                      footer: 'hidden',
+                      footerAction: 'hidden',
+                      footerActionText: 'hidden',
+                      footerActionLink: 'hidden',
+                      footerPages: 'hidden',
+                      headerTitle: 'hidden',
+                      headerSubtitle: 'hidden',
+                      socialButtonsBlockButton: 'rounded-xl border border-slate-200 hover:bg-slate-50 text-xs font-bold text-slate-700 h-10',
+                      formButtonPrimary: 'bg-[#FF5A36] hover:bg-orange-600 text-white font-bold text-xs rounded-xl shadow-md h-10 transition-all',
+                      formFieldInput: 'rounded-xl border-slate-200 text-xs focus:ring-[#FF5A36] focus:border-[#FF5A36] h-10',
+                    },
+                    layout: {
+                      socialButtonsPlacement: 'top',
+                      showOptionalFields: false,
+                    },
+                  }}
+                />
               )}
             </div>
 
@@ -477,9 +551,9 @@ print(f"🚀 Status: {result['status']} | Grade: {result['percentage']}")`;
               {authModal === 'signup' ? 'Already have an account?' : "Don't have an account?"}{' '}
               <button
                 onClick={() => setAuthModal(authModal === 'signup' ? 'signin' : 'signup')}
-                className="text-[#FF5A36] font-bold hover:underline cursor-pointer"
+                className="text-[#FF5A36] font-bold hover:underline cursor-pointer ml-1"
               >
-                {authModal === 'signup' ? 'Sign In' : 'Sign Up'}
+                {authModal === 'signup' ? 'Sign In' : 'Create Account'}
               </button>
             </div>
           </div>

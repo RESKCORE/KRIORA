@@ -32,7 +32,19 @@ const RootApp = () => {
 
   return (
     <ErrorBoundary>
-      <ClerkProvider publishableKey={PUBLISHABLE_KEY}>
+      <ClerkProvider
+        publishableKey={PUBLISHABLE_KEY}
+        appearance={{
+          variables: {
+            colorPrimary: '#FF5A36',
+            colorBackground: '#ffffff',
+            colorText: '#0f172a',
+            colorTextSecondary: '#64748b',
+            borderRadius: '0.75rem',
+            fontFamily: 'Inter, system-ui, sans-serif',
+          },
+        }}
+      >
         <ConvexProviderWithClerk client={convex} useAuth={useAuth}>
           <App />
         </ConvexProviderWithClerk>
